@@ -224,7 +224,7 @@ if (screenshotProductionBtn) {
                     `${width}px`;
 
                 screenshotClone.style.background =
-                    '#12161f';
+                    getComputedStyle(document.body).backgroundColor;
 
                 screenshotClone.style.overflow =
                     'visible';
@@ -473,7 +473,7 @@ if (screenshotProductionBtn) {
                         {
 
                             backgroundColor:
-                                '#12161f',
+                                getComputedStyle(document.body).backgroundColor,
 
                             scale: 1,
 
@@ -2077,6 +2077,35 @@ function attachListeners() {
     // TOTAL PRODUCTION
     // =========================================
 
+
+    // Keep every TOTAL (task) row in sync while typing
+    function refreshSubtotals() {
+        document
+            .querySelectorAll('.subtotal-row')
+            .forEach(tr => {
+                const addBtn =
+                    tr.querySelector('.add-row-btn-subtotal');
+
+                if (!addBtn) return;
+
+                const taskName = addBtn.dataset.task;
+
+                const itemsInput =
+                    tr.querySelector('input.calc-items');
+
+                const timeInput =
+                    tr.querySelector('input.calc-time');
+
+                if (itemsInput) {
+                    itemsInput.value = calcSubtotalItems(taskName);
+                }
+
+                if (timeInput) {
+                    timeInput.value = calcSubtotalTime(taskName);
+                }
+            });
+    }
+
     function calculateTotals() {
 
         let totalItems = 0;
@@ -2175,6 +2204,8 @@ function attachListeners() {
         // UPDATE MINUTES REMAINING
         // =====================================
 
+        refreshSubtotals();
+
         updateOTMinutesDisplay(totalTime);
     }
 
@@ -2247,6 +2278,119 @@ function attachListeners() {
                 }
             );
         });
+
+
+    // =========================================
+    // DELETE / RESTORE BUILT-IN TASKS
+    // (custom tasks already have their own x button)
+    // =========================================
+    const DELETED_BUILTINS_KEY = 'productionTrackerDeletedTasks';
+
+    let deletedBuiltIns = [];
+
+    try {
+        const savedDeleted =
+            JSON.parse(localStorage.getItem(DELETED_BUILTINS_KEY));
+
+        if (Array.isArray(savedDeleted)) {
+            deletedBuiltIns = savedDeleted.filter(
+                key => BUILT_IN_TASKS.includes(key)
+            );
+        }
+    } catch (error) {
+        deletedBuiltIns = [];
+    }
+
+    function saveDeletedBuiltIns() {
+        try {
+            localStorage.setItem(
+                DELETED_BUILTINS_KEY,
+                JSON.stringify(deletedBuiltIns)
+            );
+        } catch (error) {
+            console.warn('Could not save deleted tasks:', error);
+        }
+    }
+
+    const restoreTasksBtn = document.getElementById('restoreTasksBtn');
+
+    function applyBuiltInDeletions() {
+        document
+            .querySelectorAll('.builtin-task-control')
+            .forEach(control => {
+                const btn = control.querySelector('.toggle-btn');
+                const key = taskButtonMapping[btn.innerText.trim()];
+                const isDeleted = deletedBuiltIns.includes(key);
+
+                control.style.display = isDeleted ? 'none' : '';
+
+                if (isDeleted) {
+                    taskVisibility[key] = false;
+                    btn.classList.remove('active');
+                }
+            });
+
+        if (restoreTasksBtn) {
+            restoreTasksBtn.hidden = deletedBuiltIns.length === 0;
+            restoreTasksBtn.textContent =
+                `↺ RESTORE DELETED TASKS (${deletedBuiltIns.length})`;
+        }
+    }
+
+    // Wrap each built-in task button together with an x button
+    document
+        .querySelectorAll('.task-toggles > .toggle-btn')
+        .forEach(btn => {
+            const label = btn.innerText.trim();
+            const key = taskButtonMapping[label];
+            if (!key) return;
+
+            const control = document.createElement('div');
+            control.className = 'builtin-task-control';
+
+            const deleteBtn = document.createElement('button');
+            deleteBtn.type = 'button';
+            deleteBtn.className = 'builtin-task-delete-btn';
+            deleteBtn.textContent = '×';
+            deleteBtn.title = `Delete ${label}`;
+
+            btn.parentNode.insertBefore(control, btn);
+            control.appendChild(btn);
+            control.appendChild(deleteBtn);
+
+            deleteBtn.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
+
+                const confirmed = confirm(
+                    `Delete the task "${label}"?\n\n` +
+                    `It will be removed from the task list and left out ` +
+                    `of your totals. You can bring it back any time with ` +
+                    `the "Restore deleted tasks" button.`
+                );
+
+                if (!confirmed) return;
+
+                if (!deletedBuiltIns.includes(key)) {
+                    deletedBuiltIns.push(key);
+                }
+
+                saveDeletedBuiltIns();
+                applyBuiltInDeletions();
+                renderTable();
+            });
+        });
+
+    if (restoreTasksBtn) {
+        restoreTasksBtn.addEventListener('click', () => {
+            deletedBuiltIns = [];
+            saveDeletedBuiltIns();
+            applyBuiltInDeletions();
+            renderTable();
+        });
+    }
+
+    applyBuiltInDeletions();
 
     // =========================================
     // CUSTOM TASK BUTTONS
@@ -2752,4 +2896,41 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     render();
+});
+
+
+// =========================================
+// THEME PICKER
+// =========================================
+document.addEventListener('DOMContentLoaded', () => {
+
+    const THEME_KEY = 'productionTrackerTheme';
+    const THEMES = ['midnight', 'forest', 'daylight'];
+    const swatches = document.querySelectorAll('.theme-swatch');
+
+    function applyTheme(theme) {
+        if (!THEMES.includes(theme)) theme = 'midnight';
+
+        document.documentElement.dataset.theme = theme;
+
+        swatches.forEach(btn => {
+            const isActive = btn.dataset.theme === theme;
+            btn.classList.toggle('active', isActive);
+            btn.setAttribute('aria-pressed', String(isActive));
+        });
+    }
+
+    let saved = null;
+    try { saved = localStorage.getItem(THEME_KEY); } catch (e) {}
+
+    applyTheme(saved);
+
+    swatches.forEach(btn => {
+        btn.addEventListener('click', () => {
+            applyTheme(btn.dataset.theme);
+            try {
+                localStorage.setItem(THEME_KEY, btn.dataset.theme);
+            } catch (e) {}
+        });
+    });
 });

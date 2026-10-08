@@ -7,6 +7,14 @@
 
     <title>Production Tracker</title>
 
+    <script>
+        // Apply the saved theme before the page paints (no flash)
+        try {
+            document.documentElement.dataset.theme =
+                localStorage.getItem('productionTrackerTheme') || 'midnight';
+        } catch (e) {}
+    </script>
+
     <link rel="stylesheet" href="style.css">
 </head>
 
@@ -76,6 +84,30 @@
                     >
                         DATADOG
                     </button>
+
+                </div>
+
+
+                <!-- Theme -->
+                <div class="theme-picker" role="group" aria-label="Color theme">
+
+                    <span class="theme-label">THEME</span>
+
+                    <div class="theme-swatches">
+
+                        <button type="button" class="theme-swatch active" data-theme="midnight"
+                            style="--sw-bg:#12161f; --sw-accent:#38bdf8;"
+                            title="Midnight" aria-label="Midnight theme"></button>
+
+                        <button type="button" class="theme-swatch" data-theme="forest"
+                            style="--sw-bg:#0d1512; --sw-accent:#34d399;"
+                            title="Forest" aria-label="Forest theme"></button>
+
+                        <button type="button" class="theme-swatch" data-theme="daylight"
+                            style="--sw-bg:#eef2f7; --sw-accent:#0369a1;"
+                            title="Daylight" aria-label="Daylight theme"></button>
+
+                    </div>
 
                 </div>
 
@@ -221,7 +253,7 @@
                             </th>
 
                             <th style="width: 35%;">
-                                Merchant
+                                Merchant 
                             </th>
 
                             <th style="width: 11%;">
@@ -397,6 +429,15 @@
                         CLEAR ALL DATA
                     </button>
 
+                    <button
+                        class="action-btn restore-tasks-btn"
+                        id="restoreTasksBtn"
+                        type="button"
+                        hidden
+                    >
+                        ↺ RESTORE DELETED TASKS
+                    </button>
+
                 </div>
 
             </div>
@@ -442,7 +483,7 @@
                         </div>
 
                         <label class="calc-hint">
-                            KALKYOLATER
+                          KALKYOLATER
                         </label>
 
                     </div>
