@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Production Tracker</title>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+    <div class="app-container">
+
+
+
+            <!-- Top Bar -->
+            <header class="top-bar">
+
+                <div class="task-toggles">
+
+                    <button
+                        class="toggle-btn active"
+                        data-task="Tag"
+                        type="button"
+                    >
+                        TAG
+                    </button>
+
+                    <button
+                        class="toggle-btn"
+                        data-task="TagLite"
+                        type="button"
+                    >
+                        TAGLITE
+                    </button>
+
+                    <button
+                        class="toggle-btn"
+                        data-task="QCLite"
+                        type="button"
+                    >
+                        QC LITE
+                    </button>
+
+                    <button
+                        class="toggle-btn"
+                        data-task="TagQC"
+                        type="button"
+                    >
+                        TAG QC
+                    </button>
+
+                    <button
+                        class="toggle-btn"
+                        data-task="ImageQC"
+                        type="button"
+                    >
+                        IMAGE QC
+                    </button>
+
+                    <button
+                        class="toggle-btn"
+                        data-task="FBP"
+                        type="button"
+                    >
+                        FBP
+                    </button>
+
+                    <button
+                        class="toggle-btn"
+                        data-task="Datadog"
+                        type="button"
+                    >
+                        DATADOG
+                    </button>
+
+                </div>
+
+
+                <!-- Overtime -->
+                <div class="ot-selector">
+
+                    <div
+                        class="ot-minutes-display"
+                        id="otMinutesDisplay"
+                    >
+                        480
+                    </div>
+
+                    <div class="ot-buttons">
+
+                        <button
+                            class="ot-btn active"
+                            data-ot="0"
+                            type="button"
+                        >
+                            NO OT
+                        </button>
+
+                        <button
+                            class="ot-btn"
+                            data-ot="60"
+                            type="button"
+                        >
+                            1 HR
+                        </button>
+
+                        <button
+                            class="ot-btn"
+                            data-ot="120"
+                            type="button"
+                        >
+                            2 HRS
+                        </button>
+
+                        <button
+                            class="ot-btn"
+                            data-ot="180"
+                            type="button"
+                        >
+                            3 HRS
+                        </button>
+
+                        <button
+                            class="ot-btn"
+                            data-ot="240"
+                            type="button"
+                        >
+                            4 HRS
+                        </button>
+
+                    </div>
+
+                </div>
+
+            </header>
+
+        <!-- =========================================
+             SCREENSHOT AREA
+             Everything from the top bar through
+             TOTAL PRODUCTION will be captured.
+             ========================================= -->
+
+        <div id="screenshotArea">
+            <!-- Shift Info -->
+            <div class="shift-info-panel">
+
+                <div class="shift-title">
+
+                    <select id="shiftSelector">
+
+                        <option value="A-SHIFT">
+                            A-SHIFT
+                        </option>
+
+                        <option value="B-SHIFT">
+                            B-SHIFT
+                        </option>
+
+                        <option value="MID-SHIFT">
+                            MID-SHIFT
+                        </option>
+
+                        <option
+                            value="C-SHIFT"
+                            selected
+                        >
+                            C-SHIFT
+                        </option>
+
+                    </select>
+
+                </div>
+
+                <div class="shift-name">
+                    <input
+                        type="text"
+                        id="shiftName"
+                        value="Keith Arcedes"
+                        maxlength="40"
+                        autocomplete="off"
+                        spellcheck="false"
+                        aria-label="Your name"
+                        title="Click to edit your name"
+                    >
+                </div>
+
+                <div
+                    class="shift-day"
+                    id="productionDay"
+                >
+                    Tuesday
+                </div>
+
+                <div class="shift-date">
+
+                    <input
+                        type="date"
+                        id="productionDate"
+                    >
+
+                </div>
+
+            </div>
+
+
+            <!-- Production Table -->
+            <div class="table-container">
+
+                <table class="prod-table">
+
+                    <thead>
+
+                        <tr>
+
+                            <th style="width: 15%;">
+                                Task
+                            </th>
+
+                            <th style="width: 35%;">
+                                Merchant
+                            </th>
+
+                            <th style="width: 11%;">
+                                Items
+                            </th>
+
+                            <th style="width: 11%;">
+                                Time
+                            </th>
+
+                            <th style="width: 11%;">
+                                Rate
+                            </th>
+
+                            <th style="width: 11%;">
+                                Status
+                            </th>
+
+                        </tr>
+
+                    </thead>
+
+                    <tbody id="prodTableBody">
+
+                        <!-- Dynamic rows inserted by JavaScript -->
+
+                    </tbody>
+
+                </table>
+
+            </div>
+
+
+            <!-- Total Production -->
+            <div class="total-production-bar">
+
+                <div class="total-label-box">
+                    TOTAL PRODUCTION
+                </div>
+
+                <div class="total-metric">
+
+                    <span class="metric-title">
+                        TOTAL ITEMS
+                    </span>
+
+                    <span
+                        class="metric-value red-text"
+                        id="totalItems"
+                    >
+                        0
+                    </span>
+
+                </div>
+
+                <div class="total-metric">
+
+                    <span class="metric-title">
+                        TOTAL TIME
+                    </span>
+
+                    <span
+                        class="metric-value red-text"
+                        id="totalTime"
+                    >
+                        0
+                    </span>
+
+                </div>
+
+            </div>
+
+        </div>
+        <!-- END SCREENSHOT AREA -->
+
+
+        <!-- =========================================
+             BOTTOM TOOLS
+             These will NOT be included in screenshot.
+             ========================================= -->
+
+        <div class="bottom-tools-grid">
+
+            <!-- Comma Separator -->
+            <div class="tool-card">
+
+                <h3>
+                    Comma Separator Tool
+                </h3>
+
+                <div class="tool-content">
+
+                    <div class="input-output-split">
+
+                        <div class="stack-inputs">
+
+                            <label>
+                                Input items (one per line):
+                            </label>
+
+                            <textarea
+                                id="rawInputList"
+                                placeholder="302412&#10;302413&#10;302414"
+                                rows="4"
+                            ></textarea>
+
+                        </div>
+
+                        <div class="stack-outputs">
+
+                            <label>
+                                Formatted Output:
+                            </label>
+
+                            <div
+                                class="output-result-box"
+                                id="formattedOutput"
+                            >
+                                302412, 302413, 302414
+                            </div>
+
+                        </div>
+
+                    </div>
+
+                    <div class="tool-actions">
+
+                        <button
+                            class="action-btn"
+                            id="copyOutputBtn"
+                            type="button"
+                        >
+                            Copy Result
+                        </button>
+
+                        <button
+                            class="clear-btn"
+                            id="clearToolBtn"
+                            type="button"
+                        >
+                            CLEAR
+                        </button>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+
+            <!-- Production Controls -->
+            <div class="tool-card right-align-tool">
+
+                <h3>
+                    Production Data Control
+                </h3>
+
+                <div class="tool-content center-flex">
+
+                    <button
+                        class="screenshot-btn"
+                        id="screenshotProductionBtn"
+                        type="button"
+                    >
+                        📷 SCREENSHOT PRODUCTION
+                    </button>
+
+                    <button
+                        class="clear-btn large-clear"
+                        id="clearProductionBtn"
+                        type="button"
+                    >
+                        CLEAR ALL DATA
+                    </button>
+
+                </div>
+
+            </div>
+
+
+            <!-- Calculator -->
+            <div class="tool-card calculator-card" id="calculatorCard">
+
+                <h3>
+                    Calculator
+                </h3>
+
+                <div class="tool-content">
+
+                    <div class="calc-body">
+
+                        <div class="calc-screen">
+                            <div class="calc-history" id="calcHistory">&nbsp;</div>
+                            <div class="calc-display" id="calcDisplay">0</div>
+                        </div>
+
+                        <div class="calc-keys">
+                        <button class="action-btn calc-btn calc-fn" data-calc-action="clear" type="button" title="Clear (Esc / Delete)">C</button>
+                        <button class="action-btn calc-btn calc-fn" data-calc-action="backspace" type="button" title="Backspace">⌫</button>
+                        <button class="action-btn calc-btn calc-fn" data-calc-action="percent" type="button">%</button>
+                        <button class="action-btn calc-btn calc-op" data-calc-op="/" type="button">÷</button>
+                        <button class="action-btn calc-btn " data-calc-digit="7" type="button">7</button>
+                        <button class="action-btn calc-btn " data-calc-digit="8" type="button">8</button>
+                        <button class="action-btn calc-btn " data-calc-digit="9" type="button">9</button>
+                        <button class="action-btn calc-btn calc-op" data-calc-op="*" type="button">×</button>
+                        <button class="action-btn calc-btn " data-calc-digit="4" type="button">4</button>
+                        <button class="action-btn calc-btn " data-calc-digit="5" type="button">5</button>
+                        <button class="action-btn calc-btn " data-calc-digit="6" type="button">6</button>
+                        <button class="action-btn calc-btn calc-op" data-calc-op="-" type="button">−</button>
+                        <button class="action-btn calc-btn " data-calc-digit="1" type="button">1</button>
+                        <button class="action-btn calc-btn " data-calc-digit="2" type="button">2</button>
+                        <button class="action-btn calc-btn " data-calc-digit="3" type="button">3</button>
+                        <button class="action-btn calc-btn calc-op" data-calc-op="+" type="button">+</button>
+                        <button class="action-btn calc-btn calc-fn" data-calc-action="negate" type="button">±</button>
+                        <button class="action-btn calc-btn " data-calc-digit="0" type="button">0</button>
+                        <button class="action-btn calc-btn " data-calc-action="dot" type="button">.</button>
+                        <button class="action-btn calc-btn calc-equals" data-calc-action="equals" type="button" title="Equals (Enter)">=</button>
+                        </div>
+
+                        <label class="calc-hint">
+                            KALKYOLATER
+                        </label>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <!-- html2canvas -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+    <!-- Application JavaScript -->
+    <script src="script.js"></script>
+
+</body>
+
+</html>
