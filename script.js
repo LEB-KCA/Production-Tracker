@@ -1430,7 +1430,20 @@ function updateOTMinutesDisplay(totalTime) {
             });
         });
 
-        Object.keys(taskGroups).forEach(taskKey => {
+        // =====================================
+        // ORDER: normal + custom tasks first,
+        // FBP and Datadog always at the bottom
+        // =====================================
+        const orderedTaskKeys = [
+            ...Object.keys(taskGroups).filter(
+                key => key !== 'fbp' && key !== 'datadog'
+            ),
+            ...['fbp', 'datadog'].filter(
+                key => taskGroups[key]
+            )
+        ];
+
+        orderedTaskKeys.forEach(taskKey => {
 
             let isGroupEnabled = true;
 
