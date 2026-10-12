@@ -108,6 +108,42 @@
     color-scheme: light;
 }
 
+/* ===== Theme: Graphite (black & grey) ===== */
+:root[data-theme="graphite"] {
+    --bg-dark: #09090b;
+    --panel-dark: #111113;
+    --border-color: #3f3f46;
+    --border-strong: #52525b;
+    --header-dark: #000000;
+    --text-main: #fafafa;
+    --text-bright: #fafafa;
+    --text-muted: #a1a1aa;
+    --text-faint: #71717a;
+    --text-soft: #d4d4d8;
+    --input-text: #fafafa;
+    --accent: #e4e4e7;
+    --accent-soft: rgba(228, 228, 231, .08);
+    --accent-blue: #52525b;
+    --accent-blue-hover: #3f3f46;
+    --on-accent: #09090b;
+    --table-header: #1c1c1f;
+    --row-alt: #121214;
+    --surface-deep: #000000;
+    --btn-dark: #27272a;
+    --btn-dark-hover: #3f3f46;
+    --btn-toggle: #e4e4e7;
+    --btn-light: #e4e4e7;
+    --btn-light-hover: #d4d4d8;
+    --btn-light-text: #09090b;
+    --label-bg: #a1a1aa;
+    --total-bar-bg: #27272a;
+    --total-bar-title: #d4d4d8;
+    --subtotal-bg: #3f3f46;
+    --subtotal-border: #e4e4e7;
+    --subtotal-text: #fafafa;
+    color-scheme: dark;
+}
+
 * {
     box-sizing: border-box;
     margin: 0;
@@ -1331,4 +1367,62 @@ input.no-spinner::-webkit-inner-spin-button {
 
 .subtotal-row .subtotal-label-cell span {
     font-size: 15px;
+}
+
+
+/* =========================================
+   LANDSCAPE SCREENSHOT LAYOUT
+   (only used on the temporary screenshot copy)
+   ========================================= */
+#screenshotClone .landscape-columns {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+}
+
+#screenshotClone .landscape-col {
+    flex: 1 1 0;
+    min-width: 0;
+}
+
+#screenshotClone .landscape-col .prod-table {
+    table-layout: fixed;
+}
+
+/* Column widths for the narrower side-by-side tables
+   (inline th widths need !important to be overridden) */
+#screenshotClone .landscape-col .prod-table th:nth-child(1) { width: 13% !important; }
+#screenshotClone .landscape-col .prod-table th:nth-child(2) { width: 34% !important; }
+#screenshotClone .landscape-col .prod-table th:nth-child(3) { width: 11% !important; }
+#screenshotClone .landscape-col .prod-table th:nth-child(4) { width: 11% !important; }
+#screenshotClone .landscape-col .prod-table th:nth-child(5) { width: 11% !important; }
+#screenshotClone .landscape-col .prod-table th:nth-child(6) { width: 20% !important; }
+
+#screenshotClone .landscape-col .row-hide-btn {
+    display: none;
+}
+
+/* =========================================
+   SCREENSHOT LAYOUT SELECTOR
+   ========================================= */
+.layout-select-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.layout-select-row label {
+    white-space: nowrap;
+    font-size: 11px;
+}
+
+.layout-select-row select {
+    flex: 1;
+    min-width: 0;
+    background: var(--surface-deep);
+    color: var(--input-text);
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    padding: 6px;
+    font-size: 12px;
 }

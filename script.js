@@ -132,6 +132,133 @@ if (productionDateInput) {
         return `${last}, ${first}`.toUpperCase();
     }
 // =========================================
+// LANDSCAPE SCREENSHOT LAYOUT
+// When the table is long, the screenshot is laid out
+// in two side-by-side columns instead of one tall strip.
+// =========================================
+const LANDSCAPE_ROW_THRESHOLD = 16;  // table rows before "Auto" switches to landscape
+const LANDSCAPE_WIDTH = 1600;        // screenshot width (px) in landscape mode
+const SCREENSHOT_LAYOUT_KEY = 'productionTrackerScreenshotLayout';
+
+function getScreenshotLayoutMode() {
+    try {
+        const saved = localStorage.getItem(SCREENSHOT_LAYOUT_KEY);
+        if (['auto', 'portrait', 'landscape'].includes(saved)) {
+            return saved;
+        }
+    } catch (error) {}
+    return 'auto';
+}
+
+// Rebuilds the cloned table as two columns. Returns true on success.
+function buildLandscapeLayout(clone) {
+    const tableContainer = clone.querySelector('.table-container');
+    const table = clone.querySelector('.prod-table');
+
+    if (!tableContainer || !table || !table.tBodies[0]) return false;
+
+    const rows = Array.from(table.tBodies[0].rows);
+    if (rows.length < 2) return false;
+
+    const hasLabelCell = tr =>
+        Array.from(tr.cells).some(c => c.classList.contains('task-group-cell'));
+
+    const isSubtotal = tr => tr.classList.contains('subtotal-row');
+
+    // A new task block starts at a task label, FBP row or Datadog row
+    const startsBlock = tr =>
+        hasLabelCell(tr) ||
+        tr.classList.contains('fbp-row') ||
+        tr.classList.contains('datadog-row');
+
+    // ---- pick where to cut the table in two ----
+    // Prefer cutting between tasks; cut inside a long task only
+    // when that balances the two columns much better.
+    const ideal = rows.length / 2;
+    let cut = -1;
+    let bestScore = Infinity;
+
+    for (let p = 1; p < rows.length; p++) {
+        if (isSubtotal(rows[p])) continue;   // keep TOTAL with its rows
+
+        const score = Math.abs(p - ideal) + (startsBlock(rows[p]) ? 0 : 1.5);
+
+        if (score < bestScore) {
+            bestScore = score;
+            cut = p;
+        }
+    }
+
+    if (cut < 0) return false;
+
+    // ---- cutting inside a task: repeat its label on the right side ----
+    if (!startsBlock(rows[cut])) {
+        let start = cut;
+        while (start > 0 && !startsBlock(rows[start])) start--;
+
+        const labelCell = Array.from(rows[start].cells)
+            .find(c => c.classList.contains('task-group-cell'));
+
+        if (!labelCell) return false;
+
+        let end = cut;
+        while (end < rows.length && !isSubtotal(rows[end])) end++;
+
+        const rightLabel = labelCell.cloneNode(true);
+
+        labelCell.rowSpan = cut - start;
+        rightLabel.rowSpan = end - cut;
+        rows[cut].insertBefore(rightLabel, rows[cut].firstChild);
+    }
+
+    // ---- build the two columns ----
+    const makeColumn = rowList => {
+        const wrap = document.createElement('div');
+        wrap.className = 'table-container landscape-col';
+
+        const newTable = document.createElement('table');
+        newTable.className = table.className;
+
+        if (table.tHead) {
+            newTable.appendChild(table.tHead.cloneNode(true));
+        }
+
+        const tbody = document.createElement('tbody');
+        rowList.forEach(tr => tbody.appendChild(tr));
+        newTable.appendChild(tbody);
+        wrap.appendChild(newTable);
+
+        return wrap;
+    };
+
+    const layout = document.createElement('div');
+    layout.className = 'landscape-columns';
+    layout.appendChild(makeColumn(rows.slice(0, cut)));
+    layout.appendChild(makeColumn(rows.slice(cut)));
+
+    tableContainer.replaceWith(layout);
+
+    return true;
+}
+
+// Remember the layout choice from the dropdown
+const screenshotLayoutSelect =
+    document.getElementById('screenshotLayoutSelect');
+
+if (screenshotLayoutSelect) {
+    screenshotLayoutSelect.value = getScreenshotLayoutMode();
+
+    screenshotLayoutSelect.addEventListener('change', () => {
+        try {
+            localStorage.setItem(
+                SCREENSHOT_LAYOUT_KEY,
+                screenshotLayoutSelect.value
+            );
+        } catch (error) {}
+    });
+}
+
+// =========================================
 // SCREENSHOT PRODUCTION
 // =========================================
 
@@ -180,11 +307,11 @@ if (screenshotProductionBtn) {
                     screenshotArea.getBoundingClientRect();
 
 
-                const width =
+                let width =
                     Math.ceil(rect.width);
 
 
-                const height =
+                let height =
                     Math.ceil(
                         screenshotArea.scrollHeight
                     );
@@ -429,6 +556,14 @@ if (screenshotProductionBtn) {
                         replacement.className =
                             clonedElement.className;
 
+                        // Remember the original size so landscape mode
+                        // can stretch these to fit narrower columns
+                        replacement.setAttribute('data-shot-input', '1');
+                        replacement.setAttribute(
+                            'data-shot-height',
+                            String(originalElement.offsetHeight)
+                        );
+
 
                         // ---------------------------------
                         // Replace input
@@ -441,6 +576,45 @@ if (screenshotProductionBtn) {
                     }
                 );
 
+
+                // =========================================
+                // LANDSCAPE MODE FOR LONG TABLES
+                // =========================================
+                const layoutMode = getScreenshotLayoutMode();
+
+                const tableRowCount =
+                    document.querySelectorAll('#prodTableBody tr').length;
+
+                const wantsLandscape =
+                    layoutMode === 'landscape' ||
+                    (
+                        layoutMode === 'auto' &&
+                        tableRowCount >= LANDSCAPE_ROW_THRESHOLD
+                    );
+
+                let isLandscape = false;
+
+                if (wantsLandscape && buildLandscapeLayout(screenshotClone)) {
+                    isLandscape = true;
+
+                    width = LANDSCAPE_WIDTH;
+                    screenshotClone.style.width = `${width}px`;
+                    screenshotClone.style.minWidth = `${width}px`;
+                    screenshotClone.style.maxWidth = `${width}px`;
+                    screenshotClone.style.height = 'auto';
+
+                    // Table cells are narrower in columns, so let the
+                    // replaced inputs fill their cell instead of using
+                    // the old pixel widths.
+                    screenshotClone
+                        .querySelectorAll('.prod-table [data-shot-input]')
+                        .forEach(el => {
+                            el.style.boxSizing = 'border-box';
+                            el.style.width = '100%';
+                            el.style.height =
+                                `${el.getAttribute('data-shot-height')}px`;
+                        });
+                }
 
                 // =========================================
                 // GIVE BROWSER TIME TO RENDER CLONE
@@ -462,6 +636,12 @@ if (screenshotProductionBtn) {
                         )
                 );
 
+
+                if (isLandscape) {
+                    height = Math.ceil(
+                        screenshotClone.getBoundingClientRect().height
+                    );
+                }
 
                 // =========================================
                 // CAPTURE
@@ -2918,7 +3098,7 @@ document.addEventListener('DOMContentLoaded', () => {
 document.addEventListener('DOMContentLoaded', () => {
 
     const THEME_KEY = 'productionTrackerTheme';
-    const THEMES = ['midnight', 'forest', 'daylight'];
+    const THEMES = ['midnight', 'forest', 'daylight', 'graphite'];
     const swatches = document.querySelectorAll('.theme-swatch');
 
     function applyTheme(theme) {

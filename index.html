@@ -107,6 +107,10 @@
                             style="--sw-bg:#eef2f7; --sw-accent:#0369a1;"
                             title="Daylight" aria-label="Daylight theme"></button>
 
+                        <button type="button" class="theme-swatch" data-theme="graphite"
+                            style="--sw-bg:#09090b; --sw-accent:#a1a1aa;"
+                            title="Graphite (black &amp; grey)" aria-label="Graphite theme"></button>
+
                     </div>
 
                 </div>
@@ -253,7 +257,7 @@
                             </th>
 
                             <th style="width: 35%;">
-                                Merchant 
+                                Merchant / Description
                             </th>
 
                             <th style="width: 11%;">
@@ -421,6 +425,30 @@
                         📷 SCREENSHOT PRODUCTION
                     </button>
 
+                    <div class="layout-select-row">
+
+                        <label for="screenshotLayoutSelect">
+                            Screenshot layout
+                        </label>
+
+                        <select id="screenshotLayoutSelect">
+
+                            <option value="auto">
+                                Auto (landscape when long)
+                            </option>
+
+                            <option value="portrait">
+                                Always portrait
+                            </option>
+
+                            <option value="landscape">
+                                Always landscape
+                            </option>
+
+                        </select>
+
+                    </div>
+
                     <button
                         class="clear-btn large-clear"
                         id="clearProductionBtn"
@@ -483,7 +511,7 @@
                         </div>
 
                         <label class="calc-hint">
-                          --KALKYOLATER--
+                            Numpad / keyboard works when you're not typing in a field.
                         </label>
 
                     </div>
