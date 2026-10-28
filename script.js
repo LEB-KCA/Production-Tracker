@@ -921,6 +921,9 @@ function loadProductionData() {
 
 let selectedOT = 0;
 
+// Rate used to turn remaining minutes into "items left" (Tag QC)
+const ITEMS_LEFT_RATE = 0.88;
+
 function updateOTMinutesDisplay(totalTime) {
 
     const baseMinutes = 480;
@@ -936,6 +939,20 @@ function updateOTMinutesDisplay(totalTime) {
 
     if (display) {
         display.innerText = remainingMinutes;
+    }
+
+    // Items left = time left / Tag QC rate (0.88)
+    const itemsDisplay =
+        document.getElementById('otItemsDisplay');
+
+    if (itemsDisplay) {
+        const itemsLeft =
+            Math.max(
+                0,
+                Math.floor(remainingMinutes / ITEMS_LEFT_RATE)
+            );
+
+        itemsDisplay.innerText = itemsLeft;
     }
 }
     // =========================================
