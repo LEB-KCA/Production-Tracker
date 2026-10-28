@@ -849,6 +849,26 @@ if (screenshotProductionBtn) {
 const tbody = document.getElementById('prodTableBody');
 let rowsData = [];
 
+// Number inputs show their value only when the user typed one.
+// Empty / zero shows nothing, so the "0" is just a placeholder.
+function numberDisplay(value) {
+    return (
+        value === 0 ||
+        value === '0' ||
+        value === null ||
+        value === undefined
+    ) ? '' : value;
+}
+
+// Safe text for HTML (special task names, input names and values)
+function escapeHtml(text) {
+    return String(text === undefined || text === null ? '' : text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
 // =========================================
 // LOCAL PRODUCTION DATA SAVE / LOAD
 // =========================================
@@ -1195,6 +1215,160 @@ function updateOTMinutesDisplay(totalTime) {
             // CUSTOM TASK BUTTONS
             // =========================================
 
+            // =========================================
+            // SPECIAL TASK DIALOG
+            // The user names the task, then adds as many
+            // inputs as they need and names each one (the
+            // names become the header above the row).
+            // =========================================
+
+            function openSpecialTaskDialog(onSubmit) {
+
+                if (document.getElementById('specialTaskOverlay')) return;
+
+                const MAX_FIELDS = 5;
+
+                const overlay = document.createElement('div');
+                overlay.id = 'specialTaskOverlay';
+                overlay.className = 'modal-overlay';
+                overlay.innerHTML = `
+                    <div class="modal-box" role="dialog" aria-modal="true">
+                        <h3>New Special Task</h3>
+
+                        <label>Task name</label>
+                        <input type="text" id="spName" placeholder="e.g. Audit" maxlength="40">
+
+                        <label>Inputs (each name becomes a header)</label>
+                        <div class="sp-fields" id="spFields"></div>
+
+                        <button type="button" class="action-btn" id="spAddField">+ ADD INPUT</button>
+
+                        <div class="modal-error" id="spError"></div>
+
+                        <div class="modal-actions">
+                            <button type="button" class="clear-btn" id="spCancel">CANCEL</button>
+                            <button type="button" class="action-btn" id="spCreate">CREATE TASK</button>
+                        </div>
+                    </div>
+                `;
+
+                document.body.appendChild(overlay);
+
+                const $ = id => overlay.querySelector('#' + id);
+                const fieldsBox = $('spFields');
+                const addButton = $('spAddField');
+                const close = () => overlay.remove();
+                const showError = msg => { $('spError').textContent = msg; };
+
+                function refreshButtons() {
+                    const count = fieldsBox.children.length;
+
+                    addButton.disabled = count >= MAX_FIELDS;
+
+                    fieldsBox.querySelectorAll('.sp-remove').forEach(btn => {
+                        btn.disabled = count <= 1;
+                    });
+                }
+
+                function addFieldRow(label = '', role = 'text') {
+
+                    if (fieldsBox.children.length >= MAX_FIELDS) return;
+
+                    const row = document.createElement('div');
+                    row.className = 'sp-field-row';
+
+                    row.innerHTML = `
+                        <input type="text" class="sp-label" placeholder="Input name" maxlength="30">
+
+                        <select class="sp-role" title="What this input is used for">
+                            <option value="text">Plain input</option>
+                            <option value="items">Items (adds to Total Items)</option>
+                            <option value="time">Time (adds to Total Time)</option>
+                        </select>
+
+                        <button type="button" class="sp-remove" title="Remove input">&times;</button>
+                    `;
+
+                    row.querySelector('.sp-label').value = label;
+                    row.querySelector('.sp-role').value = role;
+
+                    row.querySelector('.sp-remove').addEventListener('click', () => {
+                        if (fieldsBox.children.length <= 1) return;
+                        row.remove();
+                        refreshButtons();
+                    });
+
+                    fieldsBox.appendChild(row);
+                    refreshButtons();
+
+                    return row;
+                }
+
+                function submit() {
+
+                    const name = $('spName').value.trim();
+
+                    const fields = Array.from(
+                        fieldsBox.querySelectorAll('.sp-field-row')
+                    ).map(row => ({
+                        label: row.querySelector('.sp-label').value.trim(),
+                        role: row.querySelector('.sp-role').value
+                    }));
+
+                    if (!name) return showError('Please enter a task name.');
+
+                    if (fields.length === 0) return showError('Add at least one input.');
+
+                    if (fields.some(field => !field.label)) {
+                        return showError('Every input needs a name.');
+                    }
+
+                    const error = onSubmit(name, fields);
+                    if (error) return showError(error);
+
+                    close();
+                }
+
+                addButton.addEventListener('click', () => {
+                    const row = addFieldRow();
+                    if (row) row.querySelector('.sp-label').focus();
+                });
+
+                $('spCreate').addEventListener('click', submit);
+                $('spCancel').addEventListener('click', close);
+                overlay.addEventListener('mousedown', e => { if (e.target === overlay) close(); });
+                overlay.addEventListener('keydown', e => {
+                    if (e.key === 'Escape') close();
+
+                    if (
+                        e.key === 'Enter' &&
+                        e.target.tagName !== 'BUTTON' &&
+                        e.target.tagName !== 'SELECT'
+                    ) {
+                        submit();
+                    }
+                });
+
+                // Start with two inputs to fill in
+                addFieldRow();
+                addFieldRow();
+
+                $('spName').focus();
+            }
+
+            function addSpecialTask(taskName, fields) {
+
+                rowsData.push({
+                    type: 'special',
+                    task: taskName,
+                    fields: fields,
+                    values: fields.map(() => ''),
+                    visible: true
+                });
+
+                taskVisibility[taskName] = true;
+            }
+
             function renderTaskButtons() {
 
                 const container = document.querySelector('.task-toggles');
@@ -1211,6 +1385,19 @@ function updateOTMinutesDisplay(totalTime) {
                 container
                     .querySelectorAll('.custom-task-control')
                     .forEach(element => element.remove());
+
+
+                // Remove old special task controls
+                container
+                    .querySelectorAll('.special-task-control')
+                    .forEach(element => element.remove());
+
+                const oldSpecialTaskButton =
+                    document.getElementById('newSpecialTaskBtn');
+
+                if (oldSpecialTaskButton) {
+                    oldSpecialTaskButton.remove();
+                }
 
 
                 // Remove old NEW TASK button
@@ -1269,6 +1456,53 @@ function updateOTMinutesDisplay(totalTime) {
 
 
                 // =========================================
+                // CREATE SPECIAL TASK BUTTONS
+                // =========================================
+
+                rowsData
+                    .filter(row => row && row.type === 'special')
+                    .forEach(row => {
+
+                        const control = document.createElement('div');
+
+                        control.className = 'special-task-control';
+
+
+                        const button = document.createElement('button');
+
+                        button.type = 'button';
+
+                        button.className =
+                            'toggle-btn special-task-btn' +
+                            (taskVisibility[row.task] ? ' active' : '');
+
+                        button.dataset.specialTask = row.task;
+
+                        button.textContent = row.task.toUpperCase();
+
+
+                        const deleteButton = document.createElement('button');
+
+                        deleteButton.type = 'button';
+
+                        deleteButton.className = 'special-task-delete-btn';
+
+                        deleteButton.dataset.deleteSpecialTask = row.task;
+
+                        deleteButton.textContent = '×';
+
+                        deleteButton.title = `Delete ${row.task}`;
+
+
+                        control.appendChild(button);
+                        control.appendChild(deleteButton);
+
+                        container.appendChild(control);
+
+                    });
+
+
+                // =========================================
                 // CREATE NEW TASK BUTTON
                 // =========================================
 
@@ -1286,6 +1520,26 @@ function updateOTMinutesDisplay(totalTime) {
 
 
                 container.appendChild(newTaskButton);
+
+
+                // =========================================
+                // CREATE SPECIAL TASK BUTTON
+                // =========================================
+
+                const newSpecialTaskButton = document.createElement('button');
+
+                newSpecialTaskButton.type = 'button';
+
+                newSpecialTaskButton.id = 'newSpecialTaskBtn';
+
+                newSpecialTaskButton.className = 'new-task-btn';
+
+                newSpecialTaskButton.textContent = '+ SPECIAL TASK';
+
+                newSpecialTaskButton.title =
+                    'Create a task with your own named inputs';
+
+                container.appendChild(newSpecialTaskButton);
 
 
                 // =========================================
@@ -1383,6 +1637,122 @@ function updateOTMinutesDisplay(totalTime) {
 
 
                         renderTable();
+
+                        return;
+                    }
+
+
+                    // =====================================
+                    // DELETE SPECIAL TASK
+                    // =====================================
+
+                    const deleteSpecialButton =
+                        event.target.closest('.special-task-delete-btn');
+
+                    if (deleteSpecialButton) {
+
+                        event.preventDefault();
+
+                        event.stopPropagation();
+
+
+                        const taskName =
+                            deleteSpecialButton.dataset.deleteSpecialTask;
+
+
+                        const confirmed = confirm(
+                            `Delete the special task "${taskName}"?\n\n` +
+                            `This will remove the task and everything typed in it.`
+                        );
+
+
+                        if (!confirmed) {
+                            return;
+                        }
+
+
+                        delete taskVisibility[taskName];
+
+
+                        rowsData = rowsData.filter(row => {
+
+                            return !(
+                                row.type === 'special' &&
+                                row.task === taskName
+                            );
+
+                        });
+
+
+                        saveProductionData();
+
+                        renderTaskButtons();
+
+                        renderTable();
+
+                        return;
+                    }
+
+
+                    // =====================================
+                    // SPECIAL TASK TOGGLE
+                    // =====================================
+
+                    const specialButton =
+                        event.target.closest('.special-task-btn');
+
+                    if (specialButton) {
+
+                        event.preventDefault();
+
+
+                        const taskName =
+                            specialButton.dataset.specialTask;
+
+
+                        taskVisibility[taskName] =
+                            !taskVisibility[taskName];
+
+
+                        specialButton.classList.toggle(
+                            'active',
+                            taskVisibility[taskName]
+                        );
+
+
+                        renderTable();
+
+                        return;
+                    }
+
+
+                    // =====================================
+                    // NEW SPECIAL TASK
+                    // =====================================
+
+                    if (event.target.closest('#newSpecialTaskBtn')) {
+
+                        event.preventDefault();
+
+
+                        openSpecialTaskDialog(function (cleanName, fields) {
+
+                            const exists = Object.keys(taskVisibility).some(task =>
+                                task.toLowerCase() === cleanName.toLowerCase()
+                            );
+
+                            if (exists) {
+                                return 'A task with this name already exists.';
+                            }
+
+                            addSpecialTask(cleanName, fields);
+
+                            saveProductionData();
+                            renderTaskButtons();
+                            renderTable();
+
+                            return null; // success -> close dialog
+                        });
 
                         return;
                     }
@@ -1609,8 +1979,8 @@ function updateOTMinutesDisplay(totalTime) {
     rowsData.push({
         type: 'datadog',
         task: 'FBP Data Dog Monitoring',
-        items: 0,
-        time: 0,
+        items: '',
+        time: '',
         visible: true
     });
 
@@ -1622,8 +1992,8 @@ function updateOTMinutesDisplay(totalTime) {
         type: 'fbp',
         task: 'FBP Checks',
         merchant: '',
-        items: 0,
-        time: 0,
+        items: '',
+        time: '',
         visible: true
     });
 
@@ -1632,6 +2002,24 @@ function updateOTMinutesDisplay(totalTime) {
     // =========================================
 
     loadProductionData();
+
+    // Special tasks live inside the saved rows. Make sure each one is
+    // visible and has its input definitions after a reload.
+    rowsData = rowsData.filter(r => {
+        return !(r && r.type === 'special' && !Array.isArray(r.fields));
+    });
+
+    rowsData
+        .filter(r => r && r.type === 'special')
+        .forEach(r => {
+            if (taskVisibility[r.task] === undefined) {
+                taskVisibility[r.task] = true;
+            }
+
+            if (!Array.isArray(r.values)) {
+                r.values = [];
+            }
+        });
 
     // =========================================
     // RENDER TABLE
@@ -1655,6 +2043,10 @@ function updateOTMinutesDisplay(totalTime) {
 
                 t = 'datadog';
 
+            } else if (row.type === 'special') {
+
+                t = 'special:' + row.task;
+
             } else {
 
                 t = row.task || row.type;
@@ -1676,10 +2068,16 @@ function updateOTMinutesDisplay(totalTime) {
         // =====================================
         const orderedTaskKeys = [
             ...Object.keys(taskGroups).filter(
-                key => key !== 'fbp' && key !== 'datadog'
+                key =>
+                    key !== 'fbp' &&
+                    key !== 'datadog' &&
+                    !key.startsWith('special:')
             ),
             ...['fbp', 'datadog'].filter(
                 key => taskGroups[key]
+            ),
+            ...Object.keys(taskGroups).filter(
+                key => key.startsWith('special:')
             )
         ];
 
@@ -1744,6 +2142,21 @@ function updateOTMinutesDisplay(totalTime) {
                         : true;
             }
 
+            // =====================================
+            // SPECIAL TASK
+            // =====================================
+
+            if (taskKey.startsWith('special:')) {
+
+                const specialName =
+                    taskKey.slice('special:'.length);
+
+                isGroupEnabled =
+                    taskVisibility[specialName] !== undefined
+                        ? taskVisibility[specialName]
+                        : true;
+            }
+
             if (!isGroupEnabled) {
                 return;
             }
@@ -1763,7 +2176,8 @@ function updateOTMinutesDisplay(totalTime) {
             if (
                 taskKey.startsWith('TOTAL') ||
                 taskKey === 'fbp' ||
-                taskKey === 'datadog'
+                taskKey === 'datadog' ||
+                taskKey.startsWith('special:')
             ) {
 
                 group.forEach(item => {
@@ -1884,7 +2298,8 @@ function updateOTMinutesDisplay(totalTime) {
                             <td class="fbp-items-cell">
                                 <input
                                     type="number"
-                                    value="${row.items}"
+                                    value="${numberDisplay(row.items)}"
+                                    placeholder="0"
                                     data-field="items"
                                     data-index="${index}"
                                     class="calc-items no-spinner"
@@ -1897,7 +2312,8 @@ function updateOTMinutesDisplay(totalTime) {
                             >
                                 <input
                                     type="number"
-                                    value="${row.time}"
+                                    value="${numberDisplay(row.time)}"
+                                    placeholder="0"
                                     data-field="time"
                                     data-index="${index}"
                                     class="calc-time no-spinner"
@@ -1945,7 +2361,8 @@ function updateOTMinutesDisplay(totalTime) {
                             <td class="datadog-items-cell">
                                 <input
                                     type="number"
-                                    value="${row.items}"
+                                    value="${numberDisplay(row.items)}"
+                                    placeholder="0"
                                     data-field="items"
                                     data-index="${index}"
                                     class="calc-items no-spinner"
@@ -1955,7 +2372,8 @@ function updateOTMinutesDisplay(totalTime) {
                             <td class="datadog-time-cell">
                                 <input
                                     type="number"
-                                    value="${row.time}"
+                                    value="${numberDisplay(row.time)}"
+                                    placeholder="0"
                                     data-field="time"
                                     data-index="${index}"
                                     class="calc-time no-spinner"
@@ -1963,6 +2381,73 @@ function updateOTMinutesDisplay(totalTime) {
                             </td>
 
                         `;
+                    }
+
+                    // =================================
+                    // SPECIAL TASK (user-defined inputs)
+                    // =================================
+
+                    else if (row.type === 'special') {
+
+                        const fields =
+                            Array.isArray(row.fields)
+                                ? row.fields
+                                : [];
+
+                        const values =
+                            Array.isArray(row.values)
+                                ? row.values
+                                : [];
+
+                        // The 5 columns after "Task" are shared
+                        // between the inputs (like FBP / Datadog)
+                        const spans = fields.map((field, i) =>
+                            Math.floor(5 / fields.length) +
+                            (i < 5 % fields.length ? 1 : 0)
+                        );
+
+                        // Header row with the names the user chose
+                        const specialHeader =
+                            document.createElement('tr');
+
+                        specialHeader.className =
+                            'special-header-row';
+
+                        specialHeader.innerHTML =
+                            '<td>Task</td>' +
+                            fields.map((field, i) =>
+                                `<td colspan="${spans[i]}">${escapeHtml(field.label)}</td>`
+                            ).join('');
+
+                        tbody.appendChild(specialHeader);
+
+                        tr.className =
+                            'section-header-row special-row';
+
+                        tr.innerHTML =
+                            `<td class="special-task-cell"><strong>${escapeHtml(row.task)}</strong></td>` +
+                            fields.map((field, i) => {
+
+                                const isText =
+                                    field.role !== 'items' &&
+                                    field.role !== 'time';
+
+                                return `
+                                    <td colspan="${spans[i]}">
+                                        <input
+                                            type="${isText ? 'text' : 'number'}"
+                                            ${isText ? '' : 'step="any"'}
+                                            value="${escapeHtml(isText ? values[i] : numberDisplay(values[i]))}"
+                                            placeholder="${isText ? escapeHtml(field.label) : '0'}"
+                                            data-field="special"
+                                            data-slot="${i}"
+                                            data-index="${index}"
+                                            class="special-input${isText ? '' : ' no-spinner'}"
+                                        >
+                                    </td>
+                                `;
+
+                            }).join('');
                     }
 
                     tbody.appendChild(tr);
@@ -2032,11 +2517,7 @@ function updateOTMinutesDisplay(totalTime) {
                         <td>
                             <input
                                 type="number"
-                                value="${
-                                    row.items !== ''
-                                        ? row.items
-                                        : ''
-                                }"
+                                value="${numberDisplay(row.items)}"
                                 placeholder="0"
                                 data-field="items"
                                 data-index="${index}"
@@ -2047,7 +2528,8 @@ function updateOTMinutesDisplay(totalTime) {
                         <td>
                             <input
                                 type="number"
-                                value="${row.time}"
+                                value="${numberDisplay(row.time)}"
+                                placeholder="0"
                                 data-field="time"
                                 data-index="${index}"
                                 class="calc-time no-spinner"
@@ -2169,6 +2651,26 @@ function attachListeners() {
                     return;
                 }
 
+                // Special task inputs are stored by position
+                if (field === 'special') {
+
+                    const slot =
+                        Number(e.target.dataset.slot);
+
+                    if (!Array.isArray(rowsData[idx].values)) {
+                        rowsData[idx].values = [];
+                    }
+
+                    rowsData[idx].values[slot] =
+                        e.target.value;
+
+                    saveProductionData();
+
+                    calculateTotals();
+
+                    return;
+                }
+
                 // Save changed value
                 rowsData[idx][field] =
                     e.target.value;
@@ -2208,7 +2710,7 @@ function attachListeners() {
 
                     if (timeInput) {
                         timeInput.value =
-                            rowsData[idx].time;
+                            numberDisplay(rowsData[idx].time);
                     }
                 }
 
@@ -2402,6 +2904,43 @@ function attachListeners() {
             // =====================================
 
             if (row.type === 'subtotal') {
+                return;
+            }
+
+            // =====================================
+            // SPECIAL TASKS
+            // Inputs set to "Items" add to TOTAL ITEMS,
+            // inputs set to "Time" add to TOTAL TIME.
+            // Plain inputs are not counted.
+            // =====================================
+
+            if (row.type === 'special') {
+
+                const specialEnabled =
+                    taskVisibility[row.task] !== undefined
+                        ? taskVisibility[row.task]
+                        : true;
+
+                if (
+                    specialEnabled &&
+                    row.visible &&
+                    Array.isArray(row.fields)
+                ) {
+                    row.fields.forEach((field, i) => {
+
+                        const amount =
+                            Number(
+                                row.values && row.values[i]
+                            ) || 0;
+
+                        if (field.role === 'time') {
+                            totalTime += amount;
+                        } else if (field.role === 'items') {
+                            totalItems += amount;
+                        }
+                    });
+                }
+
                 return;
             }
 
@@ -2833,8 +3372,8 @@ otButtons.forEach(btn => {
                         ) {
 
                             r.merchant = '';
-                            r.items = 0;
-                            r.time = 0;
+                            r.items = '';
+                            r.time = '';
 
                         }
 
@@ -2843,8 +3382,17 @@ otButtons.forEach(btn => {
                             r.type === 'datadog'
                         ) {
 
-                            r.items = 0;
-                            r.time = 0;
+                            r.items = '';
+                            r.time = '';
+
+                        }
+
+                        // Special task: empty every input
+                        else if (
+                            r.type === 'special'
+                        ) {
+
+                            r.values = (r.fields || []).map(() => '');
 
                         }
 
@@ -3108,8 +3656,11 @@ document.addEventListener('DOMContentLoaded', () => {
         // Leave browser shortcuts alone (Ctrl+C, etc.)
         if (event.ctrlKey || event.metaKey || event.altKey) return;
 
-        // Don't steal keys while the New Task dialog is open
-        if (document.getElementById('newTaskOverlay')) return;
+        // Don't steal keys while a task dialog is open
+        if (
+            document.getElementById('newTaskOverlay') ||
+            document.getElementById('specialTaskOverlay')
+        ) return;
 
         const target = event.target;
 
