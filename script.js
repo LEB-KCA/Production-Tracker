@@ -1,125 +1,1404 @@
-document.addEventListener('DOMContentLoaded', () => {
+/* =====================================================================
+ * PRODUCTION TRACKER
+ * ---------------------------------------------------------------------
+ *  1.  Config & constants
+ *  2.  Debug / logging
+ *  3.  Helpers (DOM, storage, formatting)
+ *  4.  State
+ *  5.  Model (rows, rates, totals)
+ *  6.  Persistence
+ *  7.  Table rendering
+ *  8.  Table events (delegated, attached once)
+ *  9.  Task buttons (built-in / custom / special)
+ * 10.  Dialogs
+ * 11.  Overtime
+ * 12.  Shift header (name, date, shift)
+ * 13.  Screenshot
+ * 14.  Tools (comma separator, clear all)
+ * 15.  Calculator
+ * 16.  Theme
+ * 17.  Startup
+ *
+ * DEBUGGING
+ *   - Add ?debug to the URL, or run  ProductionTracker.debug(true)  in the console.
+ *   - ProductionTracker.state       -> live app state
+ *   - ProductionTracker.dump()      -> table of every row
+ *   - ProductionTracker.validate()  -> list of data problems (empty = healthy)
+ *   - ProductionTracker.resetStorage() -> wipe saved data and reload
+ * ===================================================================== */
+(() => {
+    'use strict';
 
-    // ===============================
-// PRODUCTION DATE
-// ===============================
+    /* =================================================================
+     * 1. CONFIG & CONSTANTS
+     * ================================================================= */
 
-const PRODUCTION_DATE_KEY = 'productionTrackerDate';
-const SHIFT_NAME_KEY = 'productionTrackerShiftName';
-const DEFAULT_SHIFT_NAME = 'Keith Arcedes';
+    const CONFIG = Object.freeze({
+        baseMinutes: 480,
+        itemsLeftRate: 0.88,          // time left / this rate = items left
+        actualRate: '**',             // shown in Rate column for "actual time" tasks
+        defaultShiftName: 'Keith Arcedes',
+        maxSpecialInputs: 5,
+        screenshot: {
+            landscapeRowThreshold: 16, // table rows before "Auto" switches to landscape
+            landscapeWidth: 1600,
+            minFontSize: 8
+        }
+    });
 
-const productionDateInput = document.getElementById('productionDate');
-const productionDayDisplay = document.getElementById('productionDay');
+    // Same key names as before, so existing saved data keeps working.
+    const STORAGE_KEYS = Object.freeze({
+        date: 'productionTrackerDate',
+        shiftName: 'productionTrackerShiftName',
+        data: 'productionTrackerData',
+        overtime: 'productionTrackerOT',
+        shift: 'productionTrackerShift',
+        customTasks: 'productionTrackerCustomTasks',
+        deletedTasks: 'productionTrackerDeletedTasks',
+        screenshotLayout: 'productionTrackerScreenshotLayout',
+        theme: 'productionTrackerTheme'
+    });
+    const DEBUG_KEY = 'productionTrackerDebug';
 
-function getTodayDateString() {
-    const today = new Date();
+    // One entry per built-in toggle button.
+    //   id   = the button's data-task attribute in index.html
+    //   key  = the internal task name used in rows / visibility
+    //   rate / rows = defaults for the generated table rows
+    const TASK_TOGGLES = [
+        { id: 'Tag',     key: 'Tag',        rate: 1.2,   rows: 5, visible: false },
+        { id: 'TagLite', key: 'TagLite',    rate: 1.0,   rows: 3, visible: false },
+        { id: 'QCLite',  key: 'QC Lite',    rate: 0.42,  rows: 3, visible: false },
+        { id: 'TagQC',   key: 'Tag QC',     rate: 0.88,  rows: 5, visible: true  },
+        { id: 'ImageQC', key: 'Image',      rate: 0.073, rows: 3, visible: false },
+        { id: 'FBP',     key: 'FBP Checks',                       visible: false },
+        { id: 'Datadog', key: 'Datadog',                          visible: false }
+    ];
+    const TOGGLE_BY_ID = Object.fromEntries(TASK_TOGGLES.map(t => [t.id, t]));
+    const BUILT_IN_KEYS = TASK_TOGGLES.map(t => t.key);
 
-    const year = today.getFullYear();
-    const month = String(today.getMonth() + 1).padStart(2, '0');
-    const day = String(today.getDate()).padStart(2, '0');
+    const FBP_KEY = 'FBP Checks';
+    const DATADOG_KEY = 'Datadog';
+    const KNOWN_ROW_TYPES = ['subtotal', 'fbp', 'datadog', 'special'];
+    const SCREENSHOT_LAYOUTS = ['auto', 'portrait', 'landscape'];
+    const THEMES = ['midnight', 'forest', 'daylight', 'graphite'];
 
-    return `${year}-${month}-${day}`;
-}
+    /* =================================================================
+     * 2. DEBUG / LOGGING
+     * ================================================================= */
 
-function updateProductionDay() {
-    if (!productionDateInput || !productionDayDisplay) return;
+    const Log = (() => {
+        const PREFIX = '[ProductionTracker]';
+        let enabled = false;
 
-    const selectedDate = productionDateInput.value;
+        try {
+            enabled =
+                localStorage.getItem(DEBUG_KEY) === '1' ||
+                /[?&]debug\b/.test(location.search);
+        } catch (e) { /* storage unavailable */ }
 
-    if (!selectedDate) {
-        productionDayDisplay.textContent = '';
-        return;
+        return {
+            isEnabled: () => enabled,
+            setEnabled(on) {
+                enabled = !!on;
+                try {
+                    if (enabled) localStorage.setItem(DEBUG_KEY, '1');
+                    else localStorage.removeItem(DEBUG_KEY);
+                } catch (e) { /* ignore */ }
+                console.info(PREFIX, `debug logging ${enabled ? 'ON' : 'OFF'}`);
+            },
+            debug: (...args) => { if (enabled) console.log(PREFIX, ...args); },
+            warn: (...args) => console.warn(PREFIX, ...args),
+            error: (...args) => console.error(PREFIX, ...args)
+        };
+    })();
+
+    window.addEventListener('error', event => {
+        Log.error(
+            'Uncaught error:', event.message,
+            `${event.filename}:${event.lineno}:${event.colno}`,
+            event.error
+        );
+    });
+
+    window.addEventListener('unhandledrejection', event => {
+        Log.error('Unhandled promise rejection:', event.reason);
+    });
+
+    // Runs one startup step; a failure is logged and does not stop the rest.
+    function safeInit(name, fn) {
+        try {
+            fn();
+            Log.debug(`init ok: ${name}`);
+        } catch (error) {
+            Log.error(`init FAILED: ${name}`, error);
+        }
     }
 
-    // Add time locally so the selected date doesn't shift
-    // because of timezone conversion.
-    const date = new Date(selectedDate + 'T00:00:00');
+    /* =================================================================
+     * 3. HELPERS
+     * ================================================================= */
 
-    productionDayDisplay.textContent = date.toLocaleDateString(
-        'en-US',
-        {
-            weekday: 'long'
+    const $ = id => document.getElementById(id);
+
+    const Store = {
+        getRaw(key) {
+            try {
+                return localStorage.getItem(key);
+            } catch (error) {
+                Log.warn(`Could not read "${key}"`, error);
+                return null;
+            }
+        },
+        setRaw(key, value) {
+            try {
+                localStorage.setItem(key, value);
+                return true;
+            } catch (error) {
+                Log.error(`Could not save "${key}"`, error);
+                return false;
+            }
+        },
+        getJSON(key, fallback) {
+            const raw = Store.getRaw(key);
+            if (raw === null) return fallback;
+            try {
+                return JSON.parse(raw);
+            } catch (error) {
+                Log.warn(`Saved data in "${key}" is corrupt; ignoring it`, error);
+                return fallback;
+            }
+        },
+        setJSON(key, value) {
+            return Store.setRaw(key, JSON.stringify(value));
         }
-    );
-}
+    };
 
-// Load saved date, or default to today's date
-if (productionDateInput) {
-    const savedDate = localStorage.getItem(PRODUCTION_DATE_KEY);
+    const toNumber = value => Number(value) || 0;
 
-    productionDateInput.value = savedDate || getTodayDateString();
+    // Number inputs show a value only when the user typed one;
+    // 0 / empty shows nothing so "0" is just a placeholder.
+    function numberDisplay(value) {
+        return (value === 0 || value === '0' || value === null || value === undefined)
+            ? ''
+            : value;
+    }
 
-    updateProductionDay();
+    function escapeHtml(text) {
+        return String(text === undefined || text === null ? '' : text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
 
-    productionDateInput.addEventListener('change', () => {
-        localStorage.setItem(
-            PRODUCTION_DATE_KEY,
-            productionDateInput.value
-        );
+    function makeRow(className, html) {
+        const tr = document.createElement('tr');
+        tr.className = className;
+        tr.innerHTML = html;
+        return tr;
+    }
 
-        updateProductionDay();
-    });
-}
+    /* =================================================================
+     * 4. STATE  (the single source of truth)
+     * ================================================================= */
 
+    const state = {
+        rows: [],                 // every table row, including hidden ones
+        selectedOT: 0,            // overtime minutes
+        visibility: Object.fromEntries(
+            TASK_TOGGLES.map(t => [t.key, t.visible])
+        ),                        // task name -> shown in table / counted in totals
+        customTasks: {},          // name -> { rate, timeMode, actualTime }
+        deletedBuiltIns: []       // built-in task keys the user removed
+    };
 
-    // =========================================
-    // EDITABLE NAME (Shift section)
-    // =========================================
-    const shiftNameInput = document.getElementById('shiftName');
+    /* =================================================================
+     * 5. MODEL
+     * ================================================================= */
 
-    if (shiftNameInput) {
+    function getDefaultRate(taskName) {
+        const def = TASK_TOGGLES.find(t => t.key === taskName);
+        return def && def.rate !== undefined ? def.rate : '';
+    }
 
-        const savedName = localStorage.getItem(SHIFT_NAME_KEY);
+    function normalizeRate(timeMode, rate) {
+        return timeMode === 'actual' ? CONFIG.actualRate : (Number(rate) || 1);
+    }
 
-        shiftNameInput.value =
-            (savedName && savedName.trim()) || DEFAULT_SHIFT_NAME;
+    // items x rate, rounded to the nearest 5 minutes
+    function calculateTime(items, rate) {
+        return Math.round((toNumber(items) * toNumber(rate)) / 5) * 5;
+    }
 
-        shiftNameInput.addEventListener('input', () => {
-            localStorage.setItem(
-                SHIFT_NAME_KEY,
-                shiftNameInput.value
-            );
+    function getTaskSettings(taskName) {
+        return state.customTasks[taskName] || {
+            rate: getDefaultRate(taskName) || 1,
+            timeMode: 'rate',
+            actualTime: 0
+        };
+    }
+
+    function taskNameExists(name) {
+        const lower = name.toLowerCase();
+        return Object.keys(state.visibility).some(k => k.toLowerCase() === lower);
+    }
+
+    // ---- row factories ----
+
+    function createTaskRow(taskName, { rate, timeMode = 'rate', actualTime = 0 } = {}) {
+        return {
+            task: taskName,
+            merchant: '',
+            items: '',
+            time: timeMode === 'actual' ? actualTime : calculateTime('', rate),
+            rate,
+            timeMode,
+            actualTime,
+            status: 'WORKING',
+            visible: true
+        };
+    }
+
+    function createSubtotalRow(taskName) {
+        return {
+            type: 'subtotal',
+            task: `TOTAL (${taskName})`,
+            parent: taskName,
+            visible: true
+        };
+    }
+
+    // Older saved data has no "parent" field, so fall back to the label.
+    function getSubtotalParent(row) {
+        if (row.parent) return row.parent;
+        const match = /^TOTAL \((.*)\)$/.exec(row.task || '');
+        return match ? match[1] : row.task;
+    }
+
+    function buildDefaultRows() {
+        const rows = [];
+
+        Object.entries(state.customTasks).forEach(([name, settings]) => {
+            state.visibility[name] = true;
+            rows.push(createTaskRow(name, settings), createSubtotalRow(name));
         });
 
-        // Never leave the name blank
-        shiftNameInput.addEventListener('blur', () => {
-            const cleaned =
-                shiftNameInput.value.replace(/\s+/g, ' ').trim();
-
-            shiftNameInput.value = cleaned || DEFAULT_SHIFT_NAME;
-
-            localStorage.setItem(
-                SHIFT_NAME_KEY,
-                shiftNameInput.value
-            );
+        TASK_TOGGLES.filter(t => t.rows).forEach(t => {
+            for (let i = 0; i < t.rows; i++) {
+                rows.push(createTaskRow(t.key, { rate: t.rate }));
+            }
+            rows.push(createSubtotalRow(t.key));
         });
 
-        // Enter finishes editing
-        shiftNameInput.addEventListener('keydown', event => {
-            if (event.key === 'Enter') {
-                shiftNameInput.blur();
+        rows.push({
+            type: 'datadog', task: 'FBP Data Dog Monitoring',
+            items: '', time: '', visible: true
+        });
+
+        rows.push({
+            type: 'fbp', task: FBP_KEY,
+            merchant: '', items: '', time: '', visible: true
+        });
+
+        return rows;
+    }
+
+    function addCustomTask(name, rate, timeMode) {
+        state.customTasks[name] = {
+            rate: normalizeRate(timeMode, rate),
+            timeMode: timeMode === 'actual' ? 'actual' : 'rate',
+            actualTime: 0
+        };
+        state.visibility[name] = true;
+
+        state.rows.push(createTaskRow(name, state.customTasks[name]));
+        state.rows.push(createSubtotalRow(name));
+
+        saveCustomTasks();
+    }
+
+    function addSpecialTask(name, fields) {
+        state.rows.push({
+            type: 'special',
+            task: name,
+            fields,
+            values: fields.map(() => ''),
+            visible: true
+        });
+        state.visibility[name] = true;
+    }
+
+    // ---- visibility ----
+
+    // Which visibility entry controls this row?
+    function visibilityKeyFor(row) {
+        switch (row.type) {
+            case 'fbp': return FBP_KEY;
+            case 'datadog': return DATADOG_KEY;
+            case 'subtotal': return getSubtotalParent(row);
+            default: return row.task;     // normal and special rows
+        }
+    }
+
+    function isRowEnabled(row) {
+        const value = state.visibility[visibilityKeyFor(row)];
+        return value === undefined ? true : value;
+    }
+
+    // ---- totals ----
+
+    function calcSubtotal(taskName, field) {
+        return state.rows.reduce((sum, r) => (
+            !r.type && r.task === taskName && r.visible
+                ? sum + toNumber(r[field])
+                : sum
+        ), 0);
+    }
+
+    // FBP / Datadog: time counts, items do not.
+    // Special tasks: only inputs set to "Items" / "Time" count.
+    function computeTotals() {
+        let items = 0;
+        let time = 0;
+
+        state.rows.forEach(row => {
+            if (row.type === 'subtotal' || !row.visible || !isRowEnabled(row)) return;
+
+            if (row.type === 'special') {
+                (row.fields || []).forEach((field, i) => {
+                    const amount = toNumber(row.values && row.values[i]);
+                    if (field.role === 'time') time += amount;
+                    else if (field.role === 'items') items += amount;
+                });
+                return;
+            }
+
+            if (row.type !== 'fbp' && row.type !== 'datadog') {
+                items += toNumber(row.items);
+            }
+            time += toNumber(row.time);
+        });
+
+        return { items, time };
+    }
+
+    function updateTotals() {
+        const totals = computeTotals();
+
+        const itemsEl = $('totalItems');
+        const timeEl = $('totalTime');
+        if (itemsEl) itemsEl.innerText = totals.items;
+        if (timeEl) timeEl.innerText = totals.time;
+
+        refreshSubtotalInputs();
+        updateOvertimeDisplay(totals.time);
+    }
+
+    // Keep every "TOTAL (task)" row in sync while typing (no re-render).
+    function refreshSubtotalInputs() {
+        document.querySelectorAll('.subtotal-row').forEach(tr => {
+            const addBtn = tr.querySelector('.add-row-btn-subtotal');
+            if (!addBtn) return;
+
+            const taskName = addBtn.dataset.task;
+            const itemsInput = tr.querySelector('input.calc-items');
+            const timeInput = tr.querySelector('input.calc-time');
+
+            if (itemsInput) itemsInput.value = calcSubtotal(taskName, 'items');
+            if (timeInput) timeInput.value = calcSubtotal(taskName, 'time');
+        });
+    }
+
+    /* =================================================================
+     * 6. PERSISTENCE
+     * ================================================================= */
+
+    function saveProductionData() {
+        Store.setJSON(STORAGE_KEYS.data, state.rows);
+        Store.setRaw(STORAGE_KEYS.overtime, String(state.selectedOT));
+
+        const shiftSelector = $('shiftSelector');
+        if (shiftSelector) Store.setRaw(STORAGE_KEYS.shift, shiftSelector.value);
+
+        Log.debug('saved', { rows: state.rows.length, ot: state.selectedOT });
+    }
+
+    function saveCustomTasks() {
+        const list = Object.entries(state.customTasks).map(([name, s]) => ({
+            name,
+            rate: normalizeRate(s.timeMode, s.rate),
+            timeMode: s.timeMode === 'actual' ? 'actual' : 'rate',
+            actualTime: 0
+        }));
+        Store.setJSON(STORAGE_KEYS.customTasks, list);
+    }
+
+    function loadCustomTasks() {
+        state.customTasks = {};
+        const saved = Store.getJSON(STORAGE_KEYS.customTasks, []);
+        if (!Array.isArray(saved)) return;
+
+        saved.forEach(task => {
+            if (!task || !task.name) return;
+            const timeMode = task.timeMode === 'actual' ? 'actual' : 'rate';
+            state.customTasks[task.name] = {
+                rate: normalizeRate(timeMode, task.rate),
+                timeMode,
+                actualTime: 0
+            };
+        });
+    }
+
+    function loadDeletedBuiltIns() {
+        const saved = Store.getJSON(STORAGE_KEYS.deletedTasks, []);
+        state.deletedBuiltIns = Array.isArray(saved)
+            ? saved.filter(key => BUILT_IN_KEYS.includes(key))
+            : [];
+    }
+
+    function saveDeletedBuiltIns() {
+        Store.setJSON(STORAGE_KEYS.deletedTasks, state.deletedBuiltIns);
+    }
+
+    // Cleans rows coming from storage so one bad row can't break rendering.
+    function normalizeLoadedRows(rows) {
+        return rows
+            .filter(r => r && typeof r === 'object')
+            .filter(r => !(r.type === 'special' && !Array.isArray(r.fields)))
+            .map(r => {
+                if (r.timeMode === 'actual') r.rate = CONFIG.actualRate;
+
+                if (r.type === 'special') {
+                    if (!Array.isArray(r.values)) r.values = [];
+                    if (state.visibility[r.task] === undefined) {
+                        state.visibility[r.task] = true;
+                    }
+                }
+                return r;
+            });
+    }
+
+    function loadSavedProduction() {
+        const saved = Store.getJSON(STORAGE_KEYS.data, null);
+
+        if (Array.isArray(saved)) {
+            state.rows = normalizeLoadedRows(saved);
+            Log.debug('restored rows from storage:', state.rows.length);
+        }
+
+        const savedOT = Store.getRaw(STORAGE_KEYS.overtime);
+        if (savedOT !== null) state.selectedOT = Number(savedOT) || 0;
+    }
+
+    /* =================================================================
+     * 7. TABLE RENDERING
+     * ================================================================= */
+
+    // Groups rows by task. Order: normal tasks + subtotals (in row order),
+    // then FBP, Datadog, then special tasks.
+    function getRowGroups() {
+        const groups = new Map();
+
+        state.rows.forEach((row, index) => {
+            const kind = KNOWN_ROW_TYPES.includes(row.type) ? row.type : 'task';
+
+            let key;
+            if (kind === 'task') key = `task:${row.task}`;
+            else if (kind === 'subtotal') key = `subtotal:${getSubtotalParent(row)}`;
+            else if (kind === 'special') key = `special:${row.task}`;
+            else key = kind;
+
+            if (!groups.has(key)) {
+                groups.set(key, { kind, name: row.task, items: [] });
+            }
+            groups.get(key).items.push({ row, index });
+        });
+
+        const rank = group => ['fbp', 'datadog', 'special'].indexOf(group.kind) + 1;
+
+        return [...groups.values()].sort((a, b) => rank(a) - rank(b));
+    }
+
+    function renderTable() {
+        const tbody = $('prodTableBody');
+        if (!tbody) return;
+
+        tbody.innerHTML = '';
+
+        getRowGroups().forEach(group => {
+            const visibleItems = group.items.filter(item => item.row.visible);
+            if (!visibleItems.length) return;
+            if (!isRowEnabled(visibleItems[0].row)) return;
+
+            switch (group.kind) {
+                case 'subtotal':
+                    visibleItems.forEach(item => tbody.appendChild(renderSubtotalRow(item)));
+                    break;
+                case 'fbp':
+                    visibleItems.forEach(item => appendFbpRow(tbody, item));
+                    break;
+                case 'datadog':
+                    visibleItems.forEach(item => appendDatadogRow(tbody, item));
+                    break;
+                case 'special':
+                    visibleItems.forEach(item => appendSpecialRow(tbody, item));
+                    break;
+                default:
+                    appendTaskRows(tbody, group.name, visibleItems);
             }
         });
 
-        // Select everything on click so retyping is quick
-        shiftNameInput.addEventListener('focus', () => {
-            shiftNameInput.select();
+        updateTotals();
+    }
+
+    function renderSubtotalRow({ row }) {
+        const taskName = getSubtotalParent(row);
+
+        return makeRow('subtotal-row', `
+            <td colspan="2" class="subtotal-label-cell">
+                <button class="add-row-btn-subtotal"
+                        data-task="${escapeHtml(taskName)}"
+                        title="Add Row">+</button>
+                <span>${escapeHtml(row.task)}</span>
+            </td>
+            <td>
+                <input type="text" class="calc-items" readonly
+                       value="${calcSubtotal(taskName, 'items')}">
+            </td>
+            <td>
+                <input type="text" class="calc-time" readonly
+                       value="${calcSubtotal(taskName, 'time')}">
+            </td>
+            <td colspan="2"></td>
+        `);
+    }
+
+    function appendFbpRow(tbody, { row, index }) {
+        tbody.appendChild(makeRow('special-header-row', `
+            <td>Task</td>
+            <td colspan="2">TOTAL ULP</td>
+            <td># of Items in ULP</td>
+            <td colspan="2">Time</td>
+        `));
+
+        tbody.appendChild(makeRow('section-header-row fbp-row', `
+            <td class="fbp-task-cell"><strong>${escapeHtml(row.task)}</strong></td>
+            <td colspan="2" class="fbp-ulp-cell">
+                <input type="text" value="${escapeHtml(row.merchant)}"
+                       data-field="merchant" data-index="${index}"
+                       placeholder="TOTAL ULP">
+            </td>
+            <td class="fbp-items-cell">
+                <input type="number" value="${escapeHtml(numberDisplay(row.items))}"
+                       placeholder="0" data-field="items" data-index="${index}"
+                       class="calc-items no-spinner">
+            </td>
+            <td colspan="2" class="fbp-time-cell">
+                <input type="number" value="${escapeHtml(numberDisplay(row.time))}"
+                       placeholder="0" data-field="time" data-index="${index}"
+                       class="calc-time no-spinner">
+            </td>
+        `));
+    }
+
+    function appendDatadogRow(tbody, { row, index }) {
+        tbody.appendChild(makeRow('special-header-row', `
+            <td colspan="4">Task</td>
+            <td>Items</td>
+            <td>Time</td>
+        `));
+
+        tbody.appendChild(makeRow('section-header-row datadog-row', `
+            <td colspan="4" class="datadog-task-cell">
+                <strong>${escapeHtml(row.task)}</strong>
+            </td>
+            <td class="datadog-items-cell">
+                <input type="number" value="${escapeHtml(numberDisplay(row.items))}"
+                       placeholder="0" data-field="items" data-index="${index}"
+                       class="calc-items no-spinner">
+            </td>
+            <td class="datadog-time-cell">
+                <input type="number" value="${escapeHtml(numberDisplay(row.time))}"
+                       placeholder="0" data-field="time" data-index="${index}"
+                       class="calc-time no-spinner">
+            </td>
+        `));
+    }
+
+    // User-defined inputs. The 5 columns after "Task" are shared between them.
+    function appendSpecialRow(tbody, { row, index }) {
+        const fields = Array.isArray(row.fields) ? row.fields : [];
+        const values = Array.isArray(row.values) ? row.values : [];
+
+        const spans = fields.map((_, i) =>
+            Math.floor(5 / fields.length) + (i < 5 % fields.length ? 1 : 0)
+        );
+
+        tbody.appendChild(makeRow('special-header-row',
+            '<td>Task</td>' +
+            fields.map((field, i) =>
+                `<td colspan="${spans[i]}">${escapeHtml(field.label)}</td>`
+            ).join('')
+        ));
+
+        tbody.appendChild(makeRow('section-header-row special-row',
+            `<td class="special-task-cell"><strong>${escapeHtml(row.task)}</strong></td>` +
+            fields.map((field, i) => {
+                const isText = field.role !== 'items' && field.role !== 'time';
+                const value = isText ? values[i] : numberDisplay(values[i]);
+
+                return `
+                    <td colspan="${spans[i]}">
+                        <input type="${isText ? 'text' : 'number'}"
+                               ${isText ? '' : 'step="any"'}
+                               value="${escapeHtml(value)}"
+                               placeholder="${isText ? escapeHtml(field.label) : '0'}"
+                               data-field="special" data-slot="${i}" data-index="${index}"
+                               class="special-input${isText ? '' : ' no-spinner'}">
+                    </td>`;
+            }).join('')
+        ));
+    }
+
+    function appendTaskRows(tbody, taskName, items) {
+        items.forEach(({ row, index }, position) => {
+            const labelCell = position === 0
+                ? `<td rowspan="${items.length}" class="task-group-cell">
+                       <div class="task-label-text">${escapeHtml(taskName)}</div>
+                   </td>`
+                : '';
+
+            const statusClass = row.status === 'DONE' ? 'status-done' : 'status-working';
+
+            tbody.appendChild(makeRow('production-row', `
+                ${labelCell}
+                <td>
+                    <input type="text" value="${escapeHtml(row.merchant)}"
+                           data-field="merchant" data-index="${index}">
+                </td>
+                <td>
+                    <input type="number" value="${escapeHtml(numberDisplay(row.items))}"
+                           placeholder="0" data-field="items" data-index="${index}"
+                           class="calc-items no-spinner">
+                </td>
+                <td>
+                    <input type="number" value="${escapeHtml(numberDisplay(row.time))}"
+                           placeholder="0" data-field="time" data-index="${index}"
+                           class="calc-time no-spinner">
+                </td>
+                <td>
+                    <input type="text" value="${escapeHtml(row.rate)}"
+                           data-field="rate" data-index="${index}">
+                </td>
+                <td class="status-cell">
+                    <button class="status-toggle-btn ${statusClass}"
+                            data-index="${index}">${escapeHtml(row.status || 'WORKING')}</button>
+                    <button class="row-hide-btn" data-index="${index}"
+                            title="Delete Row">×</button>
+                </td>
+            `));
         });
+    }
+
+    /* =================================================================
+     * 8. TABLE EVENTS  (delegated: attached once, survive re-renders)
+     * ================================================================= */
+
+    function getRow(indexValue) {
+        const row = state.rows[Number(indexValue)];
+        if (!row) Log.warn('No row at index', indexValue);
+        return row;
+    }
+
+    function commitAndRender() {
+        saveProductionData();
+        renderTable();
+    }
+
+    function onTableInput(event) {
+        const input = event.target;
+        if (!(input instanceof HTMLInputElement)) return;
+
+        const { field, index } = input.dataset;
+        if (index === undefined || !field) return;
+
+        const row = getRow(index);
+        if (!row) return;
+
+        // Special task inputs are stored by position
+        if (field === 'special') {
+            if (!Array.isArray(row.values)) row.values = [];
+            row.values[Number(input.dataset.slot)] = input.value;
+            saveProductionData();
+            updateTotals();
+            return;
+        }
+
+        row[field] = input.value;
+
+        // Items or Rate changed -> recalculate Time.
+        // Time itself changed -> keep what the user typed.
+        const autoTime =
+            row.type !== 'fbp' &&
+            row.type !== 'datadog' &&
+            row.timeMode !== 'actual' &&
+            (field === 'items' || field === 'rate');
+
+        if (autoTime) {
+            row.time = calculateTime(row.items, row.rate);
+
+            const timeInput = document.querySelector(
+                `input.calc-time[data-index="${index}"]`
+            );
+            if (timeInput) timeInput.value = numberDisplay(row.time);
+        }
+
+        saveProductionData();
+        updateTotals();
+    }
+
+    function onTableClick(event) {
+        const statusBtn = event.target.closest('.status-toggle-btn');
+        if (statusBtn) {
+            const row = getRow(statusBtn.dataset.index);
+            if (!row) return;
+            row.status = row.status === 'DONE' ? 'WORKING' : 'DONE';
+            commitAndRender();
+            return;
+        }
+
+        const hideBtn = event.target.closest('.row-hide-btn');
+        if (hideBtn) {
+            const row = getRow(hideBtn.dataset.index);
+            if (!row) return;
+            row.visible = false;
+            commitAndRender();
+            return;
+        }
+
+        const addBtn = event.target.closest('.add-row-btn-subtotal');
+        if (addBtn) {
+            addRowToTask(addBtn.dataset.task);
+        }
+    }
+
+    function addRowToTask(taskName) {
+        const settings = getTaskSettings(taskName);
+        const rate = settings.timeMode === 'actual'
+            ? CONFIG.actualRate
+            : (Number(settings.rate) || getDefaultRate(taskName) || 1);
+
+        const newRow = createTaskRow(taskName, {
+            rate,
+            timeMode: settings.timeMode,
+            actualTime: settings.actualTime
+        });
+
+        const subtotalIdx = state.rows.findIndex(r =>
+            r.type === 'subtotal' && getSubtotalParent(r) === taskName
+        );
+
+        if (subtotalIdx !== -1) state.rows.splice(subtotalIdx, 0, newRow);
+        else state.rows.push(newRow);
+
+        commitAndRender();
+    }
+
+    function initTableEvents() {
+        const tbody = $('prodTableBody');
+        if (!tbody) throw new Error('#prodTableBody not found');
+
+        tbody.addEventListener('input', onTableInput);
+        tbody.addEventListener('click', onTableClick);
+    }
+
+    /* =================================================================
+     * 9. TASK BUTTONS
+     * ================================================================= */
+
+    function getToggleContainer() {
+        return document.querySelector('.task-toggles');
+    }
+
+    // ---- built-in task buttons ----
+
+    function applyBuiltInDeletions() {
+        document.querySelectorAll('.builtin-task-control').forEach(control => {
+            const btn = control.querySelector('.toggle-btn');
+            const key = btn.dataset.visibilityKey;
+            const isDeleted = state.deletedBuiltIns.includes(key);
+
+            control.style.display = isDeleted ? 'none' : '';
+
+            if (isDeleted) {
+                state.visibility[key] = false;
+                btn.classList.remove('active');
+            }
+        });
+
+        const restoreBtn = $('restoreTasksBtn');
+        if (restoreBtn) {
+            restoreBtn.hidden = state.deletedBuiltIns.length === 0;
+            restoreBtn.textContent =
+                `↺ RESTORE DELETED TASKS (${state.deletedBuiltIns.length})`;
+        }
+    }
+
+    // Wraps each built-in button with a delete (x) button.
+    function setupBuiltInButtons() {
+        const container = getToggleContainer();
+        if (!container) throw new Error('.task-toggles not found');
+
+        container.querySelectorAll(':scope > .toggle-btn').forEach(btn => {
+            const def = TOGGLE_BY_ID[btn.dataset.task];
+
+            if (!def) {
+                Log.warn('Toggle button has an unknown data-task:', btn.dataset.task);
+                return;
+            }
+
+            btn.dataset.visibilityKey = def.key;
+            btn.classList.toggle('active', !!state.visibility[def.key]);
+
+            const label = btn.innerText.trim();
+
+            const control = document.createElement('div');
+            control.className = 'builtin-task-control task-control';
+
+            const deleteBtn = document.createElement('button');
+            deleteBtn.type = 'button';
+            deleteBtn.className = 'builtin-task-delete-btn task-delete-btn';
+            deleteBtn.dataset.deleteKind = 'builtin';
+            deleteBtn.dataset.deleteName = def.key;
+            deleteBtn.dataset.label = label;
+            deleteBtn.textContent = '×';
+            deleteBtn.title = `Delete ${label}`;
+
+            btn.parentNode.insertBefore(control, btn);
+            control.appendChild(btn);
+            control.appendChild(deleteBtn);
+        });
+    }
+
+    // ---- custom + special task buttons ----
+
+    function createTaskControl(kind, name) {
+        const control = document.createElement('div');
+        control.className = `${kind}-task-control task-control`;
+
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className =
+            `toggle-btn ${kind}-task-btn` + (state.visibility[name] ? ' active' : '');
+        button.dataset.visibilityKey = name;
+        button.textContent = name.toUpperCase();
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.type = 'button';
+        deleteBtn.className = `${kind}-task-delete-btn task-delete-btn`;
+        deleteBtn.dataset.deleteKind = kind;
+        deleteBtn.dataset.deleteName = name;
+        deleteBtn.textContent = '×';
+        deleteBtn.title = `Delete ${name}`;
+
+        control.appendChild(button);
+        control.appendChild(deleteBtn);
+        return control;
+    }
+
+    function createNewTaskButton(id, text, title) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.id = id;
+        button.className = 'new-task-btn';
+        button.textContent = text;
+        button.title = title;
+        return button;
+    }
+
+    // Rebuilds the user-created buttons (custom / special / "+ NEW TASK" ...).
+    function renderTaskButtons() {
+        const container = getToggleContainer();
+        if (!container) {
+            Log.error('renderTaskButtons: .task-toggles was not found');
+            return;
+        }
+
+        container
+            .querySelectorAll('.custom-task-control, .special-task-control, .new-task-btn')
+            .forEach(el => el.remove());
+
+        Object.keys(state.customTasks).forEach(name => {
+            container.appendChild(createTaskControl('custom', name));
+        });
+
+        state.rows
+            .filter(row => row.type === 'special')
+            .forEach(row => {
+                container.appendChild(createTaskControl('special', row.task));
+            });
+
+        container.appendChild(
+            createNewTaskButton('newTaskBtn', '+ NEW TASK', 'Create a new task')
+        );
+        container.appendChild(
+            createNewTaskButton(
+                'newSpecialTaskBtn', '+ SPECIAL TASK',
+                'Create a task with your own named inputs'
+            )
+        );
+    }
+
+    // ---- delete ----
+
+    function deleteTask(kind, name, label) {
+        if (kind === 'builtin') {
+            const confirmed = confirm(
+                `Delete the task "${label || name}"?\n\n` +
+                `It will be removed from the task list and left out ` +
+                `of your totals. You can bring it back any time with ` +
+                `the "Restore deleted tasks" button.`
+            );
+            if (!confirmed) return;
+
+            if (!state.deletedBuiltIns.includes(name)) state.deletedBuiltIns.push(name);
+
+            saveDeletedBuiltIns();
+            applyBuiltInDeletions();
+            renderTable();
+            return;
+        }
+
+        if (kind === 'custom') {
+            const confirmed = confirm(
+                `Delete the custom task "${name}"?\n\n` +
+                `This will remove the task and all of its rows.`
+            );
+            if (!confirmed) return;
+
+            delete state.customTasks[name];
+            delete state.visibility[name];
+
+            state.rows = state.rows.filter(row =>
+                row.type === 'subtotal'
+                    ? getSubtotalParent(row) !== name
+                    : row.task !== name
+            );
+
+            saveCustomTasks();
+        } else if (kind === 'special') {
+            const confirmed = confirm(
+                `Delete the special task "${name}"?\n\n` +
+                `This will remove the task and everything typed in it.`
+            );
+            if (!confirmed) return;
+
+            delete state.visibility[name];
+            state.rows = state.rows.filter(row =>
+                !(row.type === 'special' && row.task === name)
+            );
+        } else {
+            Log.warn('deleteTask: unknown kind', kind);
+            return;
+        }
+
+        saveProductionData();
+        renderTaskButtons();
+        renderTable();
+    }
+
+    // ---- creation (called by the dialogs; return an error string or null) ----
+
+    function createCustomTask({ name, rate, timeMode }) {
+        if (taskNameExists(name)) return 'A task with this name already exists.';
+
+        addCustomTask(name, rate, timeMode);
+        saveProductionData();
+        renderTaskButtons();
+        renderTable();
+        return null;
+    }
+
+    function createSpecialTask({ name, fields }) {
+        if (taskNameExists(name)) return 'A task with this name already exists.';
+
+        addSpecialTask(name, fields);
+        saveProductionData();
+        renderTaskButtons();
+        renderTable();
+        return null;
+    }
+
+    // ---- one click handler for every task button ----
+
+    function onTaskButtonsClick(event) {
+        const deleteBtn = event.target.closest('.task-delete-btn');
+        if (deleteBtn) {
+            event.preventDefault();
+            event.stopPropagation();
+            deleteTask(
+                deleteBtn.dataset.deleteKind,
+                deleteBtn.dataset.deleteName,
+                deleteBtn.dataset.label
+            );
+            return;
+        }
+
+        const toggleBtn = event.target.closest('.toggle-btn[data-visibility-key]');
+        if (toggleBtn) {
+            event.preventDefault();
+            const key = toggleBtn.dataset.visibilityKey;
+            state.visibility[key] = !state.visibility[key];
+            toggleBtn.classList.toggle('active', state.visibility[key]);
+            Log.debug('toggle', key, state.visibility[key]);
+            renderTable();
+            return;
+        }
+
+        if (event.target.closest('#newSpecialTaskBtn')) {
+            event.preventDefault();
+            openSpecialTaskDialog(createSpecialTask);
+            return;
+        }
+
+        if (event.target.closest('#newTaskBtn')) {
+            event.preventDefault();
+            openNewTaskDialog(createCustomTask);
+        }
+    }
+
+    function initTaskButtons() {
+        setupBuiltInButtons();
+        applyBuiltInDeletions();
+        renderTaskButtons();
+
+        getToggleContainer().addEventListener('click', onTaskButtonsClick);
+
+        const restoreBtn = $('restoreTasksBtn');
+        if (restoreBtn) {
+            restoreBtn.addEventListener('click', () => {
+                state.deletedBuiltIns = [];
+                saveDeletedBuiltIns();
+                applyBuiltInDeletions();
+                renderTable();
+            });
+        }
+    }
+
+    /* =================================================================
+     * 10. DIALOGS
+     * ================================================================= */
+
+    // Shared modal. onSubmit(overlay) returns an error string, or a falsy
+    // value when everything worked (the modal then closes).
+    // (Electron has no window.prompt(), which is why these exist.)
+    function openModal({ id, title, bodyHtml, confirmLabel, onSubmit }) {
+        if ($(id)) return null;
+
+        const overlay = document.createElement('div');
+        overlay.id = id;
+        overlay.className = 'modal-overlay';
+        overlay.innerHTML = `
+            <div class="modal-box" role="dialog" aria-modal="true">
+                <h3>${escapeHtml(title)}</h3>
+                ${bodyHtml}
+                <div class="modal-error"></div>
+                <div class="modal-actions">
+                    <button type="button" class="clear-btn" data-modal="cancel">CANCEL</button>
+                    <button type="button" class="action-btn" data-modal="confirm">${escapeHtml(confirmLabel)}</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+
+        const errorBox = overlay.querySelector('.modal-error');
+        const close = () => overlay.remove();
+
+        function submit() {
+            const error = onSubmit(overlay);
+            if (error) {
+                errorBox.textContent = error;
+                return;
+            }
+            close();
+        }
+
+        overlay.querySelector('[data-modal="confirm"]').addEventListener('click', submit);
+        overlay.querySelector('[data-modal="cancel"]').addEventListener('click', close);
+        overlay.addEventListener('mousedown', e => { if (e.target === overlay) close(); });
+        overlay.addEventListener('keydown', e => {
+            if (e.key === 'Escape') close();
+
+            if (e.key === 'Enter' &&
+                e.target.tagName !== 'BUTTON' &&
+                e.target.tagName !== 'SELECT') {
+                submit();
+            }
+        });
+
+        return { overlay, close };
+    }
+
+    function openNewTaskDialog(onCreate) {
+        const modal = openModal({
+            id: 'newTaskOverlay',
+            title: 'New Task',
+            confirmLabel: 'CREATE TASK',
+            bodyHtml: `
+                <label>Task name</label>
+                <input type="text" id="ntName" placeholder="e.g. Audit">
+
+                <label>Rate</label>
+                <input type="number" id="ntRate" step="any" min="0" placeholder="e.g. 1.2">
+
+                <label>Time</label>
+                <div class="modal-radio">
+                    <label><input type="radio" name="ntMode" value="rate" checked> Calculate from Items &times; Rate</label>
+                    <label><input type="radio" name="ntMode" value="actual"> Use actual time (typed in the table)</label>
+                </div>
+            `,
+            onSubmit: overlay => {
+                const name = overlay.querySelector('#ntName').value.trim();
+                const useActual =
+                    overlay.querySelector('input[name="ntMode"]:checked').value === 'actual';
+                const rate = useActual
+                    ? CONFIG.actualRate
+                    : Number(overlay.querySelector('#ntRate').value);
+
+                if (!name) return 'Please enter a task name.';
+
+                if (!useActual && (!Number.isFinite(rate) || rate <= 0)) {
+                    return 'Please enter a valid rate greater than 0.';
+                }
+
+                return onCreate({ name, rate, timeMode: useActual ? 'actual' : 'rate' });
+            }
+        });
+
+        if (!modal) return;
+
+        const rateInput = modal.overlay.querySelector('#ntRate');
+
+        modal.overlay.querySelectorAll('input[name="ntMode"]').forEach(radio => {
+            radio.addEventListener('change', () => {
+                const actual =
+                    modal.overlay.querySelector('input[name="ntMode"]:checked').value === 'actual';
+
+                if (actual) {
+                    rateInput.type = 'text';
+                    rateInput.value = CONFIG.actualRate;
+                    rateInput.disabled = true;
+                } else {
+                    rateInput.disabled = false;
+                    rateInput.type = 'number';
+                    rateInput.value = '';
+                }
+            });
+        });
+
+        modal.overlay.querySelector('#ntName').focus();
+    }
+
+    // The user names the task, then adds inputs and names each one
+    // (the names become the header above the row).
+    function openSpecialTaskDialog(onCreate) {
+        const modal = openModal({
+            id: 'specialTaskOverlay',
+            title: 'New Special Task',
+            confirmLabel: 'CREATE TASK',
+            bodyHtml: `
+                <label>Task name</label>
+                <input type="text" id="spName" placeholder="e.g. Audit" maxlength="40">
+
+                <label>Inputs (each name becomes a header)</label>
+                <div class="sp-fields" id="spFields"></div>
+
+                <button type="button" class="action-btn" id="spAddField">+ ADD INPUT</button>
+            `,
+            onSubmit: overlay => {
+                const name = overlay.querySelector('#spName').value.trim();
+
+                const fields = Array.from(overlay.querySelectorAll('.sp-field-row')).map(row => ({
+                    label: row.querySelector('.sp-label').value.trim(),
+                    role: row.querySelector('.sp-role').value
+                }));
+
+                if (!name) return 'Please enter a task name.';
+                if (fields.length === 0) return 'Add at least one input.';
+                if (fields.some(field => !field.label)) return 'Every input needs a name.';
+
+                return onCreate({ name, fields });
+            }
+        });
+
+        if (!modal) return;
+
+        const fieldsBox = modal.overlay.querySelector('#spFields');
+        const addButton = modal.overlay.querySelector('#spAddField');
+
+        function refreshButtons() {
+            const count = fieldsBox.children.length;
+            addButton.disabled = count >= CONFIG.maxSpecialInputs;
+
+            fieldsBox.querySelectorAll('.sp-remove').forEach(btn => {
+                btn.disabled = count <= 1;
+            });
+        }
+
+        function addFieldRow() {
+            if (fieldsBox.children.length >= CONFIG.maxSpecialInputs) return null;
+
+            const row = document.createElement('div');
+            row.className = 'sp-field-row';
+            row.innerHTML = `
+                <input type="text" class="sp-label" placeholder="Input name" maxlength="30">
+
+                <select class="sp-role" title="What this input is used for">
+                    <option value="text">Plain input</option>
+                    <option value="items">Items (adds to Total Items)</option>
+                    <option value="time">Time (adds to Total Time)</option>
+                </select>
+
+                <button type="button" class="sp-remove" title="Remove input">&times;</button>
+            `;
+
+            row.querySelector('.sp-remove').addEventListener('click', () => {
+                if (fieldsBox.children.length <= 1) return;
+                row.remove();
+                refreshButtons();
+            });
+
+            fieldsBox.appendChild(row);
+            refreshButtons();
+            return row;
+        }
+
+        addButton.addEventListener('click', () => {
+            const row = addFieldRow();
+            if (row) row.querySelector('.sp-label').focus();
+        });
+
+        // Start with two inputs to fill in
+        addFieldRow();
+        addFieldRow();
+
+        modal.overlay.querySelector('#spName').focus();
+    }
+
+    /* =================================================================
+     * 11. OVERTIME
+     * ================================================================= */
+
+    function updateOvertimeDisplay(totalTime) {
+        const remainingMinutes =
+            CONFIG.baseMinutes + state.selectedOT - toNumber(totalTime);
+
+        const minutesEl = $('otMinutesDisplay');
+        if (minutesEl) minutesEl.innerText = remainingMinutes;
+
+        // Items left = time left / 0.88
+        const itemsEl = $('otItemsDisplay');
+        if (itemsEl) {
+            itemsEl.innerText = Math.max(
+                0,
+                Math.floor(remainingMinutes / CONFIG.itemsLeftRate)
+            );
+        }
+    }
+
+    function initOvertime() {
+        const buttons = document.querySelectorAll('.ot-btn');
+
+        const syncActive = () => {
+            buttons.forEach(btn => {
+                btn.classList.toggle(
+                    'active',
+                    (Number(btn.dataset.ot) || 0) === state.selectedOT
+                );
+            });
+        };
+
+        syncActive();
+
+        buttons.forEach(btn => {
+            btn.addEventListener('click', () => {
+                state.selectedOT = Number(btn.dataset.ot) || 0;
+                syncActive();
+                saveProductionData();
+                updateOvertimeDisplay(computeTotals().time);
+            });
+        });
+    }
+
+    /* =================================================================
+     * 12. SHIFT HEADER  (shift, name, date, weekday)
+     * ================================================================= */
+
+    function getTodayDateString() {
+        const today = new Date();
+        const y = today.getFullYear();
+        const m = String(today.getMonth() + 1).padStart(2, '0');
+        const d = String(today.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+    }
+
+    function initProductionDate() {
+        const dateInput = $('productionDate');
+        const dayDisplay = $('productionDay');
+        if (!dateInput || !dayDisplay) return;
+
+        const updateDay = () => {
+            if (!dateInput.value) {
+                dayDisplay.textContent = '';
+                return;
+            }
+            // Add the time locally so the date doesn't shift with the timezone
+            const date = new Date(dateInput.value + 'T00:00:00');
+            dayDisplay.textContent = date.toLocaleDateString('en-US', { weekday: 'long' });
+        };
+
+        dateInput.value = Store.getRaw(STORAGE_KEYS.date) || getTodayDateString();
+        updateDay();
+
+        dateInput.addEventListener('change', () => {
+            Store.setRaw(STORAGE_KEYS.date, dateInput.value);
+            updateDay();
+        });
+    }
+
+    function initShiftName() {
+        const input = $('shiftName');
+        if (!input) return;
+
+        const saved = Store.getRaw(STORAGE_KEYS.shiftName);
+        input.value = (saved && saved.trim()) || CONFIG.defaultShiftName;
+
+        input.addEventListener('input', () => {
+            Store.setRaw(STORAGE_KEYS.shiftName, input.value);
+        });
+
+        // Never leave the name blank
+        input.addEventListener('blur', () => {
+            const cleaned = input.value.replace(/\s+/g, ' ').trim();
+            input.value = cleaned || CONFIG.defaultShiftName;
+            Store.setRaw(STORAGE_KEYS.shiftName, input.value);
+        });
+
+        input.addEventListener('keydown', e => { if (e.key === 'Enter') input.blur(); });
+        input.addEventListener('focus', () => input.select());
     }
 
     // "Keith Arcedes" -> "ARCEDES, KEITH" (used for the screenshot file name)
     function getNameForFile() {
-        const cleanName = (
-            (shiftNameInput && shiftNameInput.value) || DEFAULT_SHIFT_NAME
-        )
+        const input = $('shiftName');
+
+        const cleanName = ((input && input.value) || CONFIG.defaultShiftName)
             .replace(/[\\/:*?"<>|]/g, '')
             .replace(/\s+/g, ' ')
             .trim();
 
         // Already typed as "Last, First" -> use exactly as typed
-        if (cleanName.includes(',')) {
-            return cleanName.toUpperCase();
-        }
+        if (cleanName.includes(',')) return cleanName.toUpperCase();
 
         const parts = cleanName.split(' ').filter(Boolean);
 
@@ -128,3551 +1407,620 @@ if (productionDateInput) {
 
         const last = parts[parts.length - 1];
         const first = parts.slice(0, -1).join(' ');
-
         return `${last}, ${first}`.toUpperCase();
     }
-// =========================================
-// LANDSCAPE SCREENSHOT LAYOUT
-// When the table is long, the screenshot is laid out
-// in two side-by-side columns instead of one tall strip.
-// =========================================
-const LANDSCAPE_ROW_THRESHOLD = 16;  // table rows before "Auto" switches to landscape
-const LANDSCAPE_WIDTH = 1600;        // screenshot width (px) in landscape mode
-const SCREENSHOT_LAYOUT_KEY = 'productionTrackerScreenshotLayout';
 
-function getScreenshotLayoutMode() {
-    try {
-        const saved = localStorage.getItem(SCREENSHOT_LAYOUT_KEY);
-        if (['auto', 'portrait', 'landscape'].includes(saved)) {
-            return saved;
+    function initShiftSelector() {
+        const select = $('shiftSelector');
+        if (!select) return;
+
+        const saved = Store.getRaw(STORAGE_KEYS.shift);
+        if (saved && Array.from(select.options).some(o => o.value === saved)) {
+            select.value = saved;
         }
-    } catch (error) {}
-    return 'auto';
-}
 
-// Rebuilds the cloned table as two columns. Returns true on success.
-function buildLandscapeLayout(clone) {
-    const tableContainer = clone.querySelector('.table-container');
-    const table = clone.querySelector('.prod-table');
-
-    if (!tableContainer || !table || !table.tBodies[0]) return false;
-
-    const rows = Array.from(table.tBodies[0].rows);
-    if (rows.length < 2) return false;
-
-    const hasLabelCell = tr =>
-        Array.from(tr.cells).some(c => c.classList.contains('task-group-cell'));
-
-    const isSubtotal = tr => tr.classList.contains('subtotal-row');
-
-    // A new task block starts at a task label, FBP row or Datadog row
-    const startsBlock = tr =>
-        hasLabelCell(tr) ||
-        tr.classList.contains('special-header-row');
-
-    // ---- pick where to cut the table in two ----
-    // Prefer cutting between tasks; cut inside a long task only
-    // when that balances the two columns much better.
-    const ideal = rows.length / 2;
-    let cut = -1;
-    let bestScore = Infinity;
-
-    for (let p = 1; p < rows.length; p++) {
-        if (isSubtotal(rows[p])) continue;   // keep TOTAL with its rows
-
-        // keep FBP / Datadog rows together with their header
-        if (rows[p - 1].classList.contains('special-header-row')) continue;
-
-        const score = Math.abs(p - ideal) + (startsBlock(rows[p]) ? 0 : 1.5);
-
-        if (score < bestScore) {
-            bestScore = score;
-            cut = p;
-        }
+        select.addEventListener('change', () => {
+            Store.setRaw(STORAGE_KEYS.shift, select.value);
+            Log.debug('shift selected:', select.value);
+        });
     }
 
-    if (cut < 0) return false;
-
-    // ---- cutting inside a task: repeat its label on the right side ----
-    if (!startsBlock(rows[cut])) {
-        let start = cut;
-        while (start > 0 && !startsBlock(rows[start])) start--;
-
-        const labelCell = Array.from(rows[start].cells)
-            .find(c => c.classList.contains('task-group-cell'));
-
-        if (!labelCell) return false;
-
-        let end = cut;
-        while (end < rows.length && !isSubtotal(rows[end])) end++;
-
-        const rightLabel = labelCell.cloneNode(true);
-
-        labelCell.rowSpan = cut - start;
-        rightLabel.rowSpan = end - cut;
-        rows[cut].insertBefore(rightLabel, rows[cut].firstChild);
-    }
-
-    // ---- build the two columns ----
-    const makeColumn = rowList => {
-        const wrap = document.createElement('div');
-        wrap.className = 'table-container landscape-col';
-
-        const newTable = document.createElement('table');
-        newTable.className = table.className;
-
-        if (table.tHead) {
-            newTable.appendChild(table.tHead.cloneNode(true));
-        }
-
-        const tbody = document.createElement('tbody');
-        rowList.forEach(tr => tbody.appendChild(tr));
-        newTable.appendChild(tbody);
-        wrap.appendChild(newTable);
-
-        return wrap;
-    };
-
-    const layout = document.createElement('div');
-    layout.className = 'landscape-columns';
-    layout.appendChild(makeColumn(rows.slice(0, cut)));
-    layout.appendChild(makeColumn(rows.slice(cut)));
-
-    tableContainer.replaceWith(layout);
-
-    return true;
-}
-
-// Remember the layout choice from the dropdown
-const screenshotLayoutSelect =
-    document.getElementById('screenshotLayoutSelect');
-
-if (screenshotLayoutSelect) {
-    screenshotLayoutSelect.value = getScreenshotLayoutMode();
-
-    screenshotLayoutSelect.addEventListener('change', () => {
-        try {
-            localStorage.setItem(
-                SCREENSHOT_LAYOUT_KEY,
-                screenshotLayoutSelect.value
-            );
-        } catch (error) {}
-    });
-}
-
-// =========================================
-// SCREENSHOT PRODUCTION
-// =========================================
-
-const screenshotProductionBtn =
-    document.getElementById('screenshotProductionBtn');
-
-
-if (screenshotProductionBtn) {
-
-    screenshotProductionBtn.addEventListener(
-        'click',
-        async () => {
-
-            const screenshotArea =
-                document.getElementById('screenshotArea');
-
-
-            if (!screenshotArea) {
-
-                alert('Screenshot area not found.');
-
-                return;
-            }
-
-
-            const originalText =
-                screenshotProductionBtn.innerText;
-
-
-            screenshotProductionBtn.innerText =
-                'CAPTURING...';
-
-            screenshotProductionBtn.disabled = true;
-
-
-            let screenshotClone = null;
-
-
-            try {
-
-                // =========================================
-                // GET ORIGINAL SIZE
-                // =========================================
-
-                const rect =
-                    screenshotArea.getBoundingClientRect();
-
-
-                let width =
-                    Math.ceil(rect.width);
-
-
-                let height =
-                    Math.ceil(
-                        screenshotArea.scrollHeight
-                    );
-
-
-                // =========================================
-                // CREATE A TEMPORARY CLONE
-                // =========================================
-
-                screenshotClone =
-                    screenshotArea.cloneNode(true);
-
-
-                screenshotClone.id =
-                    'screenshotClone';
-
-
-                screenshotClone.style.position =
-                    'absolute';
-
-                screenshotClone.style.left =
-                    '-10000px';
-
-                screenshotClone.style.top =
-                    '0';
-
-                screenshotClone.style.width =
-                    `${width}px`;
-
-                screenshotClone.style.height =
-                    `${height}px`;
-
-                screenshotClone.style.minWidth =
-                    `${width}px`;
-
-                screenshotClone.style.maxWidth =
-                    `${width}px`;
-
-                screenshotClone.style.background =
-                    getComputedStyle(document.body).backgroundColor;
-
-                screenshotClone.style.overflow =
-                    'visible';
-
-                screenshotClone.style.boxSizing =
-                    'border-box';
-
-
-                document.body.appendChild(
-                    screenshotClone
-                );
-
-
-                // =========================================
-                // FIX INPUTS FOR SCREENSHOT
-                //
-                // html2canvas can clip text inside
-                // native INPUT elements.
-                //
-                // We replace the inputs in the temporary
-                // screenshot copy with normal DIV elements.
-                // =========================================
-
-                const originalInputs =
-                    screenshotArea.querySelectorAll(
-                        'input, select, textarea'
-                    );
-
-
-                const clonedInputs =
-                    screenshotClone.querySelectorAll(
-                        'input, select, textarea'
-                    );
-
-
-                clonedInputs.forEach(
-                    (clonedElement, index) => {
-
-                        const originalElement =
-                            originalInputs[index];
-
-
-                        if (!originalElement) {
-                            return;
-                        }
-
-
-                        // ---------------------------------
-                        // Get displayed value
-                        // ---------------------------------
-
-                        let value = '';
-
-
-                        if (
-                            originalElement.tagName
-                                .toLowerCase() === 'select'
-                        ) {
-
-                            const selectedOption =
-                                originalElement.options[
-                                    originalElement.selectedIndex
-                                ];
-
-
-                            if (selectedOption) {
-
-                                value =
-                                    selectedOption.textContent;
-
-                            }
-
-                        } else {
-
-                            value =
-                                originalElement.value || '';
-
-                            // Date inputs hold ISO text (2026-10-07).
-                            // Show it the way the app displays it
-                            // (e.g. 10/07/2026) in the screenshot.
-                            if (
-                                originalElement.type === 'date' &&
-                                /^\d{4}-\d{2}-\d{2}$/.test(value)
-                            ) {
-                                const [y, m, d] =
-                                    value.split('-').map(Number);
-
-                                value = new Date(y, m - 1, d)
-                                    .toLocaleDateString(
-                                        undefined,
-                                        {
-                                            month: '2-digit',
-                                            day: '2-digit',
-                                            year: 'numeric'
-                                        }
-                                    );
-                            }
-
-                        }
-
-
-                        // ---------------------------------
-                        // Get original visual styles
-                        // ---------------------------------
-
-                        const styles =
-                            window.getComputedStyle(
-                                originalElement
-                            );
-
-
-                        // ---------------------------------
-                        // Create screenshot-safe element
-                        // ---------------------------------
-
-                        const replacement =
-                            document.createElement(
-                                'div'
-                            );
-
-
-                        replacement.textContent =
-                            value;
-
-
-                        // ---------------------------------
-                        // Copy important styles
-                        // ---------------------------------
-
-                        replacement.style.width =
-                            styles.width;
-
-                        replacement.style.height =
-                            styles.height;
-
-                        replacement.style.minHeight =
-                            styles.minHeight;
-
-                        replacement.style.boxSizing =
-                            styles.boxSizing;
-
-                        replacement.style.backgroundColor =
-                            styles.backgroundColor;
-
-                        replacement.style.border =
-                            styles.border;
-
-                        replacement.style.borderRadius =
-                            styles.borderRadius;
-
-                        replacement.style.color =
-                            styles.color;
-
-                        replacement.style.fontFamily =
-                            styles.fontFamily;
-
-                        replacement.style.fontSize =
-                            styles.fontSize;
-
-                        replacement.style.fontWeight =
-                            styles.fontWeight;
-
-                        replacement.style.textAlign =
-                            styles.textAlign;
-
-                        replacement.style.padding =
-                            styles.padding;
-
-                        replacement.style.margin =
-                            styles.margin;
-
-                        replacement.style.letterSpacing =
-                            styles.letterSpacing;
-
-                        replacement.style.lineHeight =
-                            styles.lineHeight;
-
-                        replacement.style.display =
-                            'flex';
-
-                        replacement.style.alignItems =
-                            'center';
-
-                        replacement.style.justifyContent =
-                            styles.textAlign === 'center'
-                                ? 'center'
-                                : styles.textAlign === 'right'
-                                    ? 'flex-end'
-                                    : 'flex-start';
-
-                        replacement.style.overflow =
-                            'visible';
-
-                        replacement.style.whiteSpace =
-                            'nowrap';
-
-
-                        // ---------------------------------
-                        // Preserve classes if needed
-                        // ---------------------------------
-
-                        replacement.className =
-                            clonedElement.className;
-
-                        // Remember the original size so landscape mode
-                        // can stretch these to fit narrower columns
-                        replacement.setAttribute('data-shot-input', '1');
-                        replacement.setAttribute(
-                            'data-shot-height',
-                            String(originalElement.offsetHeight)
-                        );
-
-
-                        // ---------------------------------
-                        // Replace input
-                        // ---------------------------------
-
-                        clonedElement.replaceWith(
-                            replacement
-                        );
-
-                    }
-                );
-
-
-                // =========================================
-                // LANDSCAPE MODE FOR LONG TABLES
-                // =========================================
-                const layoutMode = getScreenshotLayoutMode();
-
-                const tableRowCount =
-                    document.querySelectorAll('#prodTableBody tr').length;
-
-                const wantsLandscape =
-                    layoutMode === 'landscape' ||
-                    (
-                        layoutMode === 'auto' &&
-                        tableRowCount >= LANDSCAPE_ROW_THRESHOLD
-                    );
-
-                let isLandscape = false;
-
-                if (wantsLandscape && buildLandscapeLayout(screenshotClone)) {
-                    isLandscape = true;
-
-                    width = LANDSCAPE_WIDTH;
-                    screenshotClone.style.width = `${width}px`;
-                    screenshotClone.style.minWidth = `${width}px`;
-                    screenshotClone.style.maxWidth = `${width}px`;
-                    screenshotClone.style.height = 'auto';
-
-                    // Table cells are narrower in columns, so let the
-                    // replaced inputs fill their cell instead of using
-                    // the old pixel widths.
-                    screenshotClone
-                        .querySelectorAll('.prod-table [data-shot-input]')
-                        .forEach(el => {
-                            el.style.boxSizing = 'border-box';
-                            el.style.width = '100%';
-                            el.style.height =
-                                `${el.getAttribute('data-shot-height')}px`;
-                        });
-                }
-
-                // =========================================
-                // GIVE BROWSER TIME TO RENDER CLONE
-                // =========================================
-
-                await new Promise(
-                    resolve =>
-                        requestAnimationFrame(
-                            () => resolve()
-                        )
-                );
-
-
-                await new Promise(
-                    resolve =>
-                        setTimeout(
-                            resolve,
-                            100
-                        )
-                );
-
-
-                // =========================================
-                // FIT LONG TEXT INSIDE ITS BOX
-                //
-                // A long merchant name used to spill out of its
-                // box and overlap the neighbouring cells. Shrink
-                // the text until it fits; if it still doesn't fit
-                // at the smallest size, clip it at the box edge.
-                // =========================================
-                const MIN_SHOT_FONT_SIZE = 8;
-
-                screenshotClone
-                    .querySelectorAll('.prod-table [data-shot-input]')
-                    .forEach(el => {
-
-                        // Never let text draw outside its own box
-                        el.style.overflow = 'hidden';
-
-                        if (el.scrollWidth <= el.clientWidth + 1) {
-                            return;
-                        }
-
-                        let fontSize =
-                            parseFloat(
-                                window.getComputedStyle(el).fontSize
-                            ) || 14;
-
-                        while (
-                            el.scrollWidth > el.clientWidth + 1 &&
-                            fontSize > MIN_SHOT_FONT_SIZE
-                        ) {
-                            fontSize -= 0.5;
-                            el.style.fontSize = `${fontSize}px`;
-                        }
-
-                        // Still too long: show the start of the text
-                        // (centered text would be cut on both sides)
-                        if (el.scrollWidth > el.clientWidth + 1) {
-                            el.style.justifyContent = 'flex-start';
-                        }
-                    });
-
-                if (isLandscape) {
-                    height = Math.ceil(
-                        screenshotClone.getBoundingClientRect().height
-                    );
-                }
-
-                // =========================================
-                // CAPTURE
-                // =========================================
-
-                const canvas =
-                    await html2canvas(
-                        screenshotClone,
-                        {
-
-                            backgroundColor:
-                                getComputedStyle(document.body).backgroundColor,
-
-                            scale: 1,
-
-                            useCORS: true,
-
-                            logging: false,
-
-                            width: width,
-
-                            height: height,
-
-                            scrollX: 0,
-
-                            scrollY: 0
-
-                        }
-                    );
-
-
-                // =========================================
-                // DOWNLOAD
-                // =========================================
-
-                canvas.toBlob(
-                    blob => {
-
-                        if (!blob) {
-
-                            alert(
-                                'Could not create screenshot.'
-                            );
-
-                            return;
-                        }
-
-
-                        const url =
-                            URL.createObjectURL(
-                                blob
-                            );
-
-
-                        const link =
-                            document.createElement(
-                                'a'
-                            );
-
-
-                        // ---------------------------------
-                        // Filename
-                        // ---------------------------------
-
-                        const now =
-                            new Date();
-
-
-                        const month =
-                            String(
-                                now.getMonth() + 1
-                            ).padStart(
-                                2,
-                                '0'
-                            );
-
-
-                        const day =
-                            String(
-                                now.getDate()
-                            ).padStart(
-                                2,
-                                '0'
-                            );
-
-
-                        const year =
-                            now.getFullYear();
-
-
-                        const formattedDate =
-                            `${month}.${day}.${year}`;
-
-
-                        link.download =
-                            `${getNameForFile()} ${formattedDate}.png`;
-
-
-                        link.href =
-                            url;
-
-
-                        link.click();
-
-
-                        setTimeout(
-                            () => {
-
-                                URL.revokeObjectURL(
-                                    url
-                                );
-
-                            },
-                            1000
-                        );
-
-                    },
-                    'image/png'
-                );
-
-
-            } catch (error) {
-
-                console.error(
-                    'Screenshot error:',
-                    error
-                );
-
-
-                alert(
-                    'Something went wrong while taking the screenshot.'
-                );
-
-
-            } finally {
-
-                // =========================================
-                // REMOVE TEMPORARY CLONE
-                // =========================================
-
-                if (screenshotClone) {
-
-                    screenshotClone.remove();
-
-                }
-
-
-                screenshotProductionBtn.innerText =
-                    originalText;
-
-
-                screenshotProductionBtn.disabled =
-                    false;
-
-            }
-
-        }
-    );
-
-}
-
-const tbody = document.getElementById('prodTableBody');
-let rowsData = [];
-
-// Number inputs show their value only when the user typed one.
-// Empty / zero shows nothing, so the "0" is just a placeholder.
-function numberDisplay(value) {
-    return (
-        value === 0 ||
-        value === '0' ||
-        value === null ||
-        value === undefined
-    ) ? '' : value;
-}
-
-// Safe text for HTML (special task names, input names and values)
-function escapeHtml(text) {
-    return String(text === undefined || text === null ? '' : text)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-}
-
-// =========================================
-// LOCAL PRODUCTION DATA SAVE / LOAD
-// =========================================
-
-const PRODUCTION_DATA_KEY = 'productionTrackerData';
-const OT_KEY = 'productionTrackerOT';
-const SHIFT_KEY = 'productionTrackerShift';
-
-function saveProductionData() {
-    try {
-        localStorage.setItem(
-            PRODUCTION_DATA_KEY,
-            JSON.stringify(rowsData)
-        );
-
-        localStorage.setItem(
-            OT_KEY,
-            String(selectedOT)
-        );
-
-        const shiftSelector =
-            document.getElementById('shiftSelector');
-
-        if (shiftSelector) {
-            localStorage.setItem(
-                SHIFT_KEY,
-                shiftSelector.value
-            );
-        }
-
-        console.log('Production data saved locally.');
-
-    } catch (error) {
-        console.error(
-            'Could not save production data:',
-            error
-        );
-    }
-}
-
-function loadProductionData() {
-    try {
-        const savedData =
-            localStorage.getItem(PRODUCTION_DATA_KEY);
-
-        if (savedData) {
-            const parsedData =
-                JSON.parse(savedData);
-
-            if (Array.isArray(parsedData)) {
-                rowsData = parsedData;
-
-                // Actual-time rows have no rate
-                rowsData.forEach(r => {
-                    if (r && r.timeMode === 'actual') {
-                        r.rate = '**';
-                    }
-                });
-
-                console.log(
-                    'Production data restored from local storage.'
-                );
-            }
-        }
-
-        // Restore OT
-        const savedOT =
-            localStorage.getItem(OT_KEY);
-
-        if (savedOT !== null) {
-            selectedOT =
-                Number(savedOT) || 0;
-        }
-
-        // Restore Shift
-        const savedShift =
-            localStorage.getItem(SHIFT_KEY);
-
-        const shiftSelector =
-            document.getElementById('shiftSelector');
-
-        if (
-            shiftSelector &&
-            savedShift
-        ) {
-            const shiftExists =
-                Array.from(
-                    shiftSelector.options
-                ).some(
-                    option =>
-                        option.value === savedShift
-                );
-
-            if (shiftExists) {
-                shiftSelector.value =
-                    savedShift;
-            }
-        }
-
-    } catch (error) {
-        console.error(
-            'Could not load production data:',
-            error
-        );
-    }
-}
-
-// =========================================
-// OVERTIME / MINUTES REMAINING
-// =========================================
-
-let selectedOT = 0;
-
-// Rate used to turn remaining minutes into "items left" (Tag QC)
-const ITEMS_LEFT_RATE = 0.88;
-
-function updateOTMinutesDisplay(totalTime) {
-
-    const baseMinutes = 480;
-
-    const availableMinutes =
-        baseMinutes + selectedOT;
-
-    const remainingMinutes =
-        availableMinutes - (Number(totalTime) || 0);
-
-    const display =
-        document.getElementById('otMinutesDisplay');
-
-    if (display) {
-        display.innerText = remainingMinutes;
-    }
-
-    // Items left = time left / Tag QC rate (0.88)
-    const itemsDisplay =
-        document.getElementById('otItemsDisplay');
-
-    if (itemsDisplay) {
-        const itemsLeft =
-            Math.max(
-                0,
-                Math.floor(remainingMinutes / ITEMS_LEFT_RATE)
-            );
-
-        itemsDisplay.innerText = itemsLeft;
-    }
-}
-    // =========================================
-    // TASK VISIBILITY
-    // =========================================
-
-    let taskVisibility = {
-        'Tag': false,
-        'TagLite': false,
-        'QC Lite': false,
-        'Tag QC': true,
-        'Image': false,
-        'FBP Checks': false,
-        'Datadog': false
-    };
-
-    // =========================================
-    // CUSTOM TASK SETTINGS
-    // =========================================
-
-    const CUSTOM_TASKS_KEY = 'productionTrackerCustomTasks';
-    const BUILT_IN_TASKS = [
-        'Tag', 'TagLite', 'QC Lite', 'Tag QC', 'Image',
-        'FBP Checks', 'Datadog'
+    /* =================================================================
+     * 13. SCREENSHOT
+     * ================================================================= */
+
+    // Style properties copied from a real <input> onto its text stand-in
+    const COPIED_INPUT_STYLES = [
+        'width', 'height', 'minHeight', 'boxSizing', 'backgroundColor',
+        'border', 'borderRadius', 'color', 'fontFamily', 'fontSize',
+        'fontWeight', 'textAlign', 'padding', 'margin', 'letterSpacing',
+        'lineHeight'
     ];
 
-    let customTaskSettings = {};
-
-    // Actual-time tasks have no rate, so the Rate column shows "**"
-    const ACTUAL_RATE = '**';
-
-    function normalizeRate(timeMode, rate) {
-        return timeMode === 'actual'
-            ? ACTUAL_RATE
-            : (Number(rate) || 1);
+    function getScreenshotLayoutMode() {
+        const saved = Store.getRaw(STORAGE_KEYS.screenshotLayout);
+        return SCREENSHOT_LAYOUTS.includes(saved) ? saved : 'auto';
     }
 
-    function loadCustomTaskSettings() {
-        try {
-            const saved = JSON.parse(localStorage.getItem(CUSTOM_TASKS_KEY));
-
-            if (Array.isArray(saved)) {
-                saved.forEach(task => {
-                    if (task && task.name) {
-                        customTaskSettings[task.name] = {
-                            rate: normalizeRate(task.timeMode === 'actual' ? 'actual' : 'rate', task.rate),
-                            timeMode: task.timeMode === 'actual' ? 'actual' : 'rate',
-                            actualTime: 0
-                        };
-                    }
-                });
-            }
-        } catch (error) {
-            console.warn('Could not load custom tasks:', error);
-            customTaskSettings = {};
-        }
+    function setCloneWidth(clone, width) {
+        clone.style.width = `${width}px`;
+        clone.style.minWidth = `${width}px`;
+        clone.style.maxWidth = `${width}px`;
     }
 
-    function saveCustomTaskSettings() {
-        const saved = Object.entries(customTaskSettings).map(([name, settings]) => ({
-            name,
-            rate: normalizeRate(settings.timeMode, settings.rate),
-            timeMode: settings.timeMode === 'actual' ? 'actual' : 'rate',
-            actualTime: 0
-        }));
+    // Off-screen copy of the capture area. The original page is never touched.
+    function createScreenshotClone(area, width, height, background) {
+        const clone = area.cloneNode(true);
+        clone.id = 'screenshotClone';
 
-        localStorage.setItem(CUSTOM_TASKS_KEY, JSON.stringify(saved));
-    }
-
-    function getTaskSettings(taskName) {
-        if (customTaskSettings[taskName]) return customTaskSettings[taskName];
-
-        return {
-            rate: getDefaultRate(taskName) || 1,
-            timeMode: 'rate',
-            actualTime: 0
-        };
-    }
-
-    function addCustomTask(taskName, rate, timeMode, actualTime) {
-        customTaskSettings[taskName] = {
-            rate: normalizeRate(timeMode, rate),
-            timeMode: timeMode === 'actual' ? 'actual' : 'rate',
-            actualTime: 0
-        };
-
-        taskVisibility[taskName] = true;
-
-        const settings = customTaskSettings[taskName];
-
-        rowsData.push({
-            task: taskName,
-            merchant: '',
-            items: '',
-            time: settings.timeMode === 'actual' ? settings.actualTime : 0,
-            rate: settings.rate,
-            timeMode: settings.timeMode,
-            actualTime: settings.actualTime,
-            status: 'WORKING',
-            visible: true
+        Object.assign(clone.style, {
+            position: 'absolute',
+            left: '-10000px',
+            top: '0',
+            height: `${height}px`,
+            background,
+            overflow: 'visible',
+            boxSizing: 'border-box'
         });
+        setCloneWidth(clone, width);
 
-        rowsData.push({
-            type: 'subtotal',
-            task: `TOTAL (${taskName})`,
-            visible: true
-        });
-
-        saveCustomTaskSettings();
+        document.body.appendChild(clone);
+        return clone;
     }
 
-            // =========================================
-            // NEW TASK DIALOG (replaces prompt(), which Electron doesn't support)
-            // =========================================
-
-            function openNewTaskDialog(onSubmit) {
-
-                if (document.getElementById('newTaskOverlay')) return;
-
-                const overlay = document.createElement('div');
-                overlay.id = 'newTaskOverlay';
-                overlay.className = 'modal-overlay';
-                overlay.innerHTML = `
-                    <div class="modal-box" role="dialog" aria-modal="true">
-                        <h3>New Task</h3>
-
-                        <label>Task name</label>
-                        <input type="text" id="ntName" placeholder="e.g. Audit">
-
-                        <label>Rate</label>
-                        <input type="number" id="ntRate" step="any" min="0" placeholder="e.g. 1.2">
-
-                        <label>Time</label>
-                        <div class="modal-radio">
-                            <label><input type="radio" name="ntMode" value="rate" checked> Calculate from Items &times; Rate</label>
-                            <label><input type="radio" name="ntMode" value="actual"> Use actual time (typed in the table)</label>
-                        </div>
-
-
-                        <div class="modal-error" id="ntError"></div>
-
-                        <div class="modal-actions">
-                            <button type="button" class="clear-btn" id="ntCancel">CANCEL</button>
-                            <button type="button" class="action-btn" id="ntCreate">CREATE TASK</button>
-                        </div>
-                    </div>
-                `;
-
-                document.body.appendChild(overlay);
-
-                const $ = id => overlay.querySelector('#' + id);
-                const close = () => overlay.remove();
-
-                const showError = msg => { $('ntError').textContent = msg; };
-
-
-                function submit() {
-                    const name = $('ntName').value.trim();
-                    const useActual = overlay.querySelector('input[name="ntMode"]:checked').value === 'actual';
-                    const rate = useActual ? ACTUAL_RATE : Number($('ntRate').value);
-                    const actualTime = 0; // actual time is typed per row in the table
-
-                    if (!name) return showError('Please enter a task name.');
-                    if (!useActual && (!Number.isFinite(rate) || rate <= 0)) return showError('Please enter a valid rate greater than 0.');
-
-                    const error = onSubmit(name, rate, useActual, actualTime);
-                    if (error) return showError(error);
-
-                    close();
-                }
-
-                $('ntCreate').addEventListener('click', submit);
-                $('ntCancel').addEventListener('click', close);
-                overlay.addEventListener('mousedown', e => { if (e.target === overlay) close(); });
-                overlay.addEventListener('keydown', e => {
-                    if (e.key === 'Escape') close();
-                    if (e.key === 'Enter') submit();
-                });
-
-                const rateInput = $('ntRate');
-                overlay.querySelectorAll('input[name="ntMode"]').forEach(radio => {
-                    radio.addEventListener('change', () => {
-                        const actual = overlay.querySelector('input[name="ntMode"]:checked').value === 'actual';
-                        if (actual) {
-                            rateInput.type = 'text';
-                            rateInput.value = ACTUAL_RATE;
-                            rateInput.disabled = true;
-                        } else {
-                            rateInput.disabled = false;
-                            rateInput.type = 'number';
-                            rateInput.value = '';
-                        }
-                    });
-                });
-                $('ntName').focus();
-            }
-
-            // =========================================
-            // CUSTOM TASK BUTTONS
-            // =========================================
-
-            // =========================================
-            // SPECIAL TASK DIALOG
-            // The user names the task, then adds as many
-            // inputs as they need and names each one (the
-            // names become the header above the row).
-            // =========================================
-
-            function openSpecialTaskDialog(onSubmit) {
-
-                if (document.getElementById('specialTaskOverlay')) return;
-
-                const MAX_FIELDS = 5;
-
-                const overlay = document.createElement('div');
-                overlay.id = 'specialTaskOverlay';
-                overlay.className = 'modal-overlay';
-                overlay.innerHTML = `
-                    <div class="modal-box" role="dialog" aria-modal="true">
-                        <h3>New Special Task</h3>
-
-                        <label>Task name</label>
-                        <input type="text" id="spName" placeholder="e.g. Audit" maxlength="40">
-
-                        <label>Inputs (each name becomes a header)</label>
-                        <div class="sp-fields" id="spFields"></div>
-
-                        <button type="button" class="action-btn" id="spAddField">+ ADD INPUT</button>
-
-                        <div class="modal-error" id="spError"></div>
-
-                        <div class="modal-actions">
-                            <button type="button" class="clear-btn" id="spCancel">CANCEL</button>
-                            <button type="button" class="action-btn" id="spCreate">CREATE TASK</button>
-                        </div>
-                    </div>
-                `;
-
-                document.body.appendChild(overlay);
-
-                const $ = id => overlay.querySelector('#' + id);
-                const fieldsBox = $('spFields');
-                const addButton = $('spAddField');
-                const close = () => overlay.remove();
-                const showError = msg => { $('spError').textContent = msg; };
-
-                function refreshButtons() {
-                    const count = fieldsBox.children.length;
-
-                    addButton.disabled = count >= MAX_FIELDS;
-
-                    fieldsBox.querySelectorAll('.sp-remove').forEach(btn => {
-                        btn.disabled = count <= 1;
-                    });
-                }
-
-                function addFieldRow(label = '', role = 'text') {
-
-                    if (fieldsBox.children.length >= MAX_FIELDS) return;
-
-                    const row = document.createElement('div');
-                    row.className = 'sp-field-row';
-
-                    row.innerHTML = `
-                        <input type="text" class="sp-label" placeholder="Input name" maxlength="30">
-
-                        <select class="sp-role" title="What this input is used for">
-                            <option value="text">Plain input</option>
-                            <option value="items">Items (adds to Total Items)</option>
-                            <option value="time">Time (adds to Total Time)</option>
-                        </select>
-
-                        <button type="button" class="sp-remove" title="Remove input">&times;</button>
-                    `;
-
-                    row.querySelector('.sp-label').value = label;
-                    row.querySelector('.sp-role').value = role;
-
-                    row.querySelector('.sp-remove').addEventListener('click', () => {
-                        if (fieldsBox.children.length <= 1) return;
-                        row.remove();
-                        refreshButtons();
-                    });
-
-                    fieldsBox.appendChild(row);
-                    refreshButtons();
-
-                    return row;
-                }
-
-                function submit() {
-
-                    const name = $('spName').value.trim();
-
-                    const fields = Array.from(
-                        fieldsBox.querySelectorAll('.sp-field-row')
-                    ).map(row => ({
-                        label: row.querySelector('.sp-label').value.trim(),
-                        role: row.querySelector('.sp-role').value
-                    }));
-
-                    if (!name) return showError('Please enter a task name.');
-
-                    if (fields.length === 0) return showError('Add at least one input.');
-
-                    if (fields.some(field => !field.label)) {
-                        return showError('Every input needs a name.');
-                    }
-
-                    const error = onSubmit(name, fields);
-                    if (error) return showError(error);
-
-                    close();
-                }
-
-                addButton.addEventListener('click', () => {
-                    const row = addFieldRow();
-                    if (row) row.querySelector('.sp-label').focus();
-                });
-
-                $('spCreate').addEventListener('click', submit);
-                $('spCancel').addEventListener('click', close);
-                overlay.addEventListener('mousedown', e => { if (e.target === overlay) close(); });
-                overlay.addEventListener('keydown', e => {
-                    if (e.key === 'Escape') close();
-
-                    if (
-                        e.key === 'Enter' &&
-                        e.target.tagName !== 'BUTTON' &&
-                        e.target.tagName !== 'SELECT'
-                    ) {
-                        submit();
-                    }
-                });
-
-                // Start with two inputs to fill in
-                addFieldRow();
-                addFieldRow();
-
-                $('spName').focus();
-            }
-
-            function addSpecialTask(taskName, fields) {
-
-                rowsData.push({
-                    type: 'special',
-                    task: taskName,
-                    fields: fields,
-                    values: fields.map(() => ''),
-                    visible: true
-                });
-
-                taskVisibility[taskName] = true;
-            }
-
-            function renderTaskButtons() {
-
-                const container = document.querySelector('.task-toggles');
-
-                if (!container) {
-                    console.error('NEW TASK ERROR: .task-toggles was not found.');
-                    return;
-                }
-
-                console.log('renderTaskButtons() is running');
-
-
-                // Remove old custom task controls
-                container
-                    .querySelectorAll('.custom-task-control')
-                    .forEach(element => element.remove());
-
-
-                // Remove old special task controls
-                container
-                    .querySelectorAll('.special-task-control')
-                    .forEach(element => element.remove());
-
-                const oldSpecialTaskButton =
-                    document.getElementById('newSpecialTaskBtn');
-
-                if (oldSpecialTaskButton) {
-                    oldSpecialTaskButton.remove();
-                }
-
-
-                // Remove old NEW TASK button
-                const oldNewTaskButton = document.getElementById('newTaskBtn');
-
-                if (oldNewTaskButton) {
-                    oldNewTaskButton.remove();
-                }
-
-
-                // =========================================
-                // CREATE CUSTOM TASK BUTTONS
-                // =========================================
-
-                Object.keys(customTaskSettings).forEach(taskName => {
-
-                    const control = document.createElement('div');
-
-                    control.className = 'custom-task-control';
-
-
-                    // Main custom task button
-                    const button = document.createElement('button');
-
-                    button.type = 'button';
-
-                    button.className =
-                        'toggle-btn custom-task-btn' +
-                        (taskVisibility[taskName] ? ' active' : '');
-
-                    button.dataset.customTask = taskName;
-
-                    button.textContent = taskName.toUpperCase();
-
-
-                    // Delete button
-                    const deleteButton = document.createElement('button');
-
-                    deleteButton.type = 'button';
-
-                    deleteButton.className = 'custom-task-delete-btn';
-
-                    deleteButton.dataset.deleteCustomTask = taskName;
-
-                    deleteButton.textContent = '×';
-
-                    deleteButton.title = `Delete ${taskName}`;
-
-
-                    control.appendChild(button);
-                    control.appendChild(deleteButton);
-
-                    container.appendChild(control);
-
-                });
-
-
-                // =========================================
-                // CREATE SPECIAL TASK BUTTONS
-                // =========================================
-
-                rowsData
-                    .filter(row => row && row.type === 'special')
-                    .forEach(row => {
-
-                        const control = document.createElement('div');
-
-                        control.className = 'special-task-control';
-
-
-                        const button = document.createElement('button');
-
-                        button.type = 'button';
-
-                        button.className =
-                            'toggle-btn special-task-btn' +
-                            (taskVisibility[row.task] ? ' active' : '');
-
-                        button.dataset.specialTask = row.task;
-
-                        button.textContent = row.task.toUpperCase();
-
-
-                        const deleteButton = document.createElement('button');
-
-                        deleteButton.type = 'button';
-
-                        deleteButton.className = 'special-task-delete-btn';
-
-                        deleteButton.dataset.deleteSpecialTask = row.task;
-
-                        deleteButton.textContent = '×';
-
-                        deleteButton.title = `Delete ${row.task}`;
-
-
-                        control.appendChild(button);
-                        control.appendChild(deleteButton);
-
-                        container.appendChild(control);
-
-                    });
-
-
-                // =========================================
-                // CREATE NEW TASK BUTTON
-                // =========================================
-
-                const newTaskButton = document.createElement('button');
-
-                newTaskButton.type = 'button';
-
-                newTaskButton.id = 'newTaskBtn';
-
-                newTaskButton.className = 'new-task-btn';
-
-                newTaskButton.textContent = '+ NEW TASK';
-
-                newTaskButton.title = 'Create a new task';
-
-
-                container.appendChild(newTaskButton);
-
-
-                // =========================================
-                // CREATE SPECIAL TASK BUTTON
-                // =========================================
-
-                const newSpecialTaskButton = document.createElement('button');
-
-                newSpecialTaskButton.type = 'button';
-
-                newSpecialTaskButton.id = 'newSpecialTaskBtn';
-
-                newSpecialTaskButton.className = 'new-task-btn';
-
-                newSpecialTaskButton.textContent = '+ SPECIAL TASK';
-
-                newSpecialTaskButton.title =
-                    'Create a task with your own named inputs';
-
-                container.appendChild(newSpecialTaskButton);
-
-
-                // =========================================
-                // CLICK HANDLER
-                // =========================================
-
-                container.onclick = function (event) {
-
-                    console.log(
-                        'Task toggle area clicked:',
-                        event.target
-                    );
-
-
-                    // =====================================
-                    // DELETE CUSTOM TASK
-                    // =====================================
-
-                    const deleteButton =
-                        event.target.closest('.custom-task-delete-btn');
-
-                    if (deleteButton) {
-
-                        event.preventDefault();
-
-                        event.stopPropagation();
-
-
-                        const taskName =
-                            deleteButton.dataset.deleteCustomTask;
-
-
-                        const confirmed = confirm(
-                            `Delete the custom task "${taskName}"?\n\n` +
-                            `This will remove the task and all of its rows.`
-                        );
-
-
-                        if (!confirmed) {
-                            return;
-                        }
-
-
-                        delete customTaskSettings[taskName];
-
-                        delete taskVisibility[taskName];
-
-
-                        rowsData = rowsData.filter(row => {
-
-                            return (
-                                row.task !== taskName &&
-                                row.task !== `TOTAL (${taskName})`
-                            );
-
-                        });
-
-
-                        saveCustomTaskSettings();
-
-                        saveProductionData();
-
-                        renderTaskButtons();
-
-                        renderTable();
-
-                        return;
-                    }
-
-
-                    // =====================================
-                    // CUSTOM TASK TOGGLE
-                    // =====================================
-
-                    const customButton =
-                        event.target.closest('.custom-task-btn');
-
-                    if (customButton) {
-
-                        event.preventDefault();
-
-
-                        const taskName =
-                            customButton.dataset.customTask;
-
-
-                        taskVisibility[taskName] =
-                            !taskVisibility[taskName];
-
-
-                        customButton.classList.toggle(
-                            'active',
-                            taskVisibility[taskName]
-                        );
-
-
-                        renderTable();
-
-                        return;
-                    }
-
-
-                    // =====================================
-                    // DELETE SPECIAL TASK
-                    // =====================================
-
-                    const deleteSpecialButton =
-                        event.target.closest('.special-task-delete-btn');
-
-                    if (deleteSpecialButton) {
-
-                        event.preventDefault();
-
-                        event.stopPropagation();
-
-
-                        const taskName =
-                            deleteSpecialButton.dataset.deleteSpecialTask;
-
-
-                        const confirmed = confirm(
-                            `Delete the special task "${taskName}"?\n\n` +
-                            `This will remove the task and everything typed in it.`
-                        );
-
-
-                        if (!confirmed) {
-                            return;
-                        }
-
-
-                        delete taskVisibility[taskName];
-
-
-                        rowsData = rowsData.filter(row => {
-
-                            return !(
-                                row.type === 'special' &&
-                                row.task === taskName
-                            );
-
-                        });
-
-
-                        saveProductionData();
-
-                        renderTaskButtons();
-
-                        renderTable();
-
-                        return;
-                    }
-
-
-                    // =====================================
-                    // SPECIAL TASK TOGGLE
-                    // =====================================
-
-                    const specialButton =
-                        event.target.closest('.special-task-btn');
-
-                    if (specialButton) {
-
-                        event.preventDefault();
-
-
-                        const taskName =
-                            specialButton.dataset.specialTask;
-
-
-                        taskVisibility[taskName] =
-                            !taskVisibility[taskName];
-
-
-                        specialButton.classList.toggle(
-                            'active',
-                            taskVisibility[taskName]
-                        );
-
-
-                        renderTable();
-
-                        return;
-                    }
-
-
-                    // =====================================
-                    // NEW SPECIAL TASK
-                    // =====================================
-
-                    if (event.target.closest('#newSpecialTaskBtn')) {
-
-                        event.preventDefault();
-
-
-                        openSpecialTaskDialog(function (cleanName, fields) {
-
-                            const exists = Object.keys(taskVisibility).some(task =>
-                                task.toLowerCase() === cleanName.toLowerCase()
-                            );
-
-                            if (exists) {
-                                return 'A task with this name already exists.';
-                            }
-
-                            addSpecialTask(cleanName, fields);
-
-                            saveProductionData();
-                            renderTaskButtons();
-                            renderTable();
-
-                            return null; // success -> close dialog
-                        });
-
-                        return;
-                    }
-
-
-                    // =====================================
-                    // NEW TASK
-                    // =====================================
-
-                    const newTaskButtonClicked =
-                        event.target.closest('#newTaskBtn');
-
-
-                    if (!newTaskButtonClicked) {
-                        return;
-                    }
-
-
-                    event.preventDefault();
-
-
-                    console.log('=================================');
-                    console.log('NEW TASK BUTTON CLICKED');
-                    console.log('=================================');
-
-
-                    openNewTaskDialog(function (cleanName, rate, useActualTime, actualTime) {
-
-                        const exists = Object.keys(taskVisibility).some(task =>
-                            task.toLowerCase() === cleanName.toLowerCase()
-                        );
-
-                        if (exists) {
-                            return 'A task with this name already exists.';
-                        }
-
-                        addCustomTask(
-                            cleanName,
-                            rate,
-                            useActualTime ? 'actual' : 'rate',
-                            actualTime
-                        );
-
-                        saveProductionData();
-                        renderTaskButtons();
-                        renderTable();
-
-                        return null; // success -> close dialog
-                    });
-
-                };
-
-            }
-
-    loadCustomTaskSettings();
-
-    Object.keys(customTaskSettings).forEach(taskName => {
-        const settings = customTaskSettings[taskName];
-        taskVisibility[taskName] = true;
-
-        rowsData.push({
-            task: taskName,
-            merchant: '',
-            items: '',
-            time: settings.timeMode === 'actual' ? settings.actualTime : 0,
-            rate: settings.rate,
-            timeMode: settings.timeMode,
-            actualTime: settings.actualTime,
-            status: 'WORKING',
-            visible: true
-        });
-
-        rowsData.push({
-            type: 'subtotal',
-            task: `TOTAL (${taskName})`,
-            visible: true
-        });
-    });
-
-    // =========================================
-    // DEFAULT RATES
-    // =========================================
-
-    function getDefaultRate(taskName) {
-
-        if (taskName === 'Tag') return 1.2;
-        if (taskName === 'TagLite') return 1.0;
-        if (taskName === 'QC Lite') return 0.42;
-        if (taskName === 'Tag QC') return 0.88;
-        if (taskName === 'Image') return 0.073;
-
-        return '';
-    }
-
-    // =========================================
-    // TIME CALCULATION
-    // =========================================
-
-    function calculateTime(items, rate) {
-    const itm = Number(items) || 0;
-    const rt = Number(rate) || 0;
-    const rawTime = itm * rt;
-    return Math.round(rawTime / 5) * 5;
-}
-
-    // =========================================
-    // GENERATE NORMAL TASK ROWS
-    // =========================================
-
-    function generateTaskRows(
-        taskName,
-        count,
-        defaultMerchant = '',
-        defaultItems = 0,
-        defaultRate = null,
-        defaultStatus = 'WORKING',
-        timeMode = 'rate',
-        actualTime = 0
-    ) {
-
-        const rate =
-            defaultRate !== null
-                ? defaultRate
-                : getDefaultRate(taskName);
-
-        for (let i = 0; i < count; i++) {
-
-            let itms =
-                (i === 0 && defaultItems > 0)
-                    ? defaultItems
-                    : '';
-
-            rowsData.push({
-                task: taskName,
-
-                merchant:
-                    i === 0 && defaultMerchant
-                        ? defaultMerchant
-                        : '',
-
-                items: itms,
-
-                time:
-                    timeMode === 'actual'
-                        ? actualTime
-                        : calculateTime(itms, rate),
-
-                rate: rate,
-
-                timeMode: timeMode,
-
-                actualTime: actualTime,
-
-                status:
-                    i === 0
-                        ? defaultStatus
-                        : 'WORKING',
-
-                visible: true
-            });
-        }
-
-        // Subtotal row
-        rowsData.push({
-            type: 'subtotal',
-            task: `TOTAL (${taskName})`,
-            visible: true
-        });
-    }
-
-    // =========================================
-    // INITIAL TASKS
-    // =========================================
-
-    generateTaskRows(
-        'Tag',
-        5,
-        '',
-        0,
-        1.2,
-        'WORKING'
-    );
-
-    generateTaskRows(
-        'TagLite',
-        3,
-        '',
-        0,
-        1.0,
-        'WORKING'
-    );
-
-    generateTaskRows(
-        'QC Lite',
-        3,
-        '',
-        0,
-        0.42,
-        'WORKING'
-    );
-
-    generateTaskRows(
-        'Tag QC',
-        5,
-        '',
-        0,
-        0.88,
-        'WORKING'
-    );
-
-    generateTaskRows(
-        'Image',
-        3,
-        '',
-        0,
-        0.073,
-        'WORKING'
-    );
-
-    // =========================================
-    // DATADOG SINGLE ROW
-    // =========================================
-
-    rowsData.push({
-        type: 'datadog',
-        task: 'FBP Data Dog Monitoring',
-        items: '',
-        time: '',
-        visible: true
-    });
-
-    // =========================================
-    // FBP SINGLE ROW
-    // =========================================
-
-    rowsData.push({
-        type: 'fbp',
-        task: 'FBP Checks',
-        merchant: '',
-        items: '',
-        time: '',
-        visible: true
-    });
-
-    // =========================================
-    // RESTORE SAVED PRODUCTION DATA
-    // =========================================
-
-    loadProductionData();
-
-    // Special tasks live inside the saved rows. Make sure each one is
-    // visible and has its input definitions after a reload.
-    rowsData = rowsData.filter(r => {
-        return !(r && r.type === 'special' && !Array.isArray(r.fields));
-    });
-
-    rowsData
-        .filter(r => r && r.type === 'special')
-        .forEach(r => {
-            if (taskVisibility[r.task] === undefined) {
-                taskVisibility[r.task] = true;
-            }
-
-            if (!Array.isArray(r.values)) {
-                r.values = [];
-            }
-        });
-
-    // =========================================
-    // RENDER TABLE
-    // =========================================
-
-    function renderTable() {
-
-        tbody.innerHTML = '';
-
-        let taskGroups = {};
-
-        rowsData.forEach((row, index) => {
-
-            let t;
-
-            if (row.type === 'fbp') {
-
-                t = 'fbp';
-
-            } else if (row.type === 'datadog') {
-
-                t = 'datadog';
-
-            } else if (row.type === 'special') {
-
-                t = 'special:' + row.task;
-
+    // html2canvas can clip text inside native inputs, so the copy gets
+    // plain DIVs showing each input's value instead.
+    function replaceInputsWithText(originalArea, clone) {
+        const originals = originalArea.querySelectorAll('input, select, textarea');
+        const clones = clone.querySelectorAll('input, select, textarea');
+
+        clones.forEach((clonedEl, index) => {
+            const originalEl = originals[index];
+            if (!originalEl) return;
+
+            let value = '';
+
+            if (originalEl.tagName.toLowerCase() === 'select') {
+                const option = originalEl.options[originalEl.selectedIndex];
+                if (option) value = option.textContent.trim();
             } else {
-
-                t = row.task || row.type;
-            }
-
-            if (!taskGroups[t]) {
-                taskGroups[t] = [];
-            }
-
-            taskGroups[t].push({
-                row,
-                index
-            });
-        });
-
-        // =====================================
-        // ORDER: normal + custom tasks first,
-        // FBP and Datadog always at the bottom
-        // =====================================
-        const orderedTaskKeys = [
-            ...Object.keys(taskGroups).filter(
-                key =>
-                    key !== 'fbp' &&
-                    key !== 'datadog' &&
-                    !key.startsWith('special:')
-            ),
-            ...['fbp', 'datadog'].filter(
-                key => taskGroups[key]
-            ),
-            ...Object.keys(taskGroups).filter(
-                key => key.startsWith('special:')
-            )
-        ];
-
-        orderedTaskKeys.forEach(taskKey => {
-
-            let isGroupEnabled = true;
-
-            // =====================================
-            // NORMAL TASK
-            // =====================================
-
-            if (
-                !taskKey.startsWith('TOTAL') &&
-                taskKey !== 'fbp' &&
-                taskKey !== 'datadog'
-            ) {
-
-                isGroupEnabled =
-                    taskVisibility[taskKey] !== undefined
-                        ? taskVisibility[taskKey]
-                        : true;
-            }
-
-            // =====================================
-            // SUBTOTAL
-            // =====================================
-
-            else if (taskKey.startsWith('TOTAL')) {
-
-                let originalTaskName =
-                    taskKey
-                        .replace('TOTAL (', '')
-                        .replace(')', '');
-
-                isGroupEnabled =
-                    taskVisibility[originalTaskName] !== undefined
-                        ? taskVisibility[originalTaskName]
-                        : true;
-            }
-
-            // =====================================
-            // FBP
-            // =====================================
-
-            else if (taskKey === 'fbp') {
-
-                isGroupEnabled =
-                    taskVisibility['FBP Checks'] !== undefined
-                        ? taskVisibility['FBP Checks']
-                        : true;
-            }
-
-            // =====================================
-            // DATADOG
-            // =====================================
-
-            else if (taskKey === 'datadog') {
-
-                isGroupEnabled =
-                    taskVisibility['Datadog'] !== undefined
-                        ? taskVisibility['Datadog']
-                        : true;
-            }
-
-            // =====================================
-            // SPECIAL TASK
-            // =====================================
-
-            if (taskKey.startsWith('special:')) {
-
-                const specialName =
-                    taskKey.slice('special:'.length);
-
-                isGroupEnabled =
-                    taskVisibility[specialName] !== undefined
-                        ? taskVisibility[specialName]
-                        : true;
-            }
-
-            if (!isGroupEnabled) {
-                return;
-            }
-
-            let group = taskGroups[taskKey];
-
-            let visibleGroupRows =
-                group.filter(item => item.row.visible);
-
-            let visibleCount =
-                visibleGroupRows.length;
-
-            // =====================================
-            // SPECIAL ROWS
-            // =====================================
-
-            if (
-                taskKey.startsWith('TOTAL') ||
-                taskKey === 'fbp' ||
-                taskKey === 'datadog' ||
-                taskKey.startsWith('special:')
-            ) {
-
-                group.forEach(item => {
-
-                    let row = item.row;
-                    let index = item.index;
-
-                    if (!row.visible) {
-                        return;
-                    }
-
-                    const tr =
-                        document.createElement('tr');
-
-                    // =================================
-                    // SUBTOTAL
-                    // =================================
-
-                    if (row.type === 'subtotal') {
-
-                        tr.className =
-                            'subtotal-row';
-
-                        let cleanName =
-                            taskKey
-                                .replace('TOTAL (', '')
-                                .replace(')', '');
-
-                        tr.innerHTML = `
-                            <td
-                                colspan="2"
-                                class="subtotal-label-cell"
-                            >
-
-                                <button
-                                    class="add-row-btn-subtotal"
-                                    data-task="${cleanName}"
-                                    title="Add Row"
-                                >
-                                    +
-                                </button>
-
-                                <span>
-                                    ${taskKey}
-                                </span>
-
-                            </td>
-
-                            <td>
-                                <input
-                                    type="text"
-                                    class="calc-items"
-                                    value="${calcSubtotalItems(cleanName)}"
-                                    readonly
-                                >
-                            </td>
-
-                            <td>
-                                <input
-                                    type="text"
-                                    class="calc-time"
-                                    value="${calcSubtotalTime(cleanName)}"
-                                    readonly
-                                >
-                            </td>
-
-                            <td colspan="2"></td>
-                        `;
-
-                    }
-
-                    // =================================
-                    // FBP CHECKS
-                    // =================================
-
-                    else if (row.type === 'fbp') {
-
-                        // Column header for the FBP row
-                        const fbpHeader =
-                            document.createElement('tr');
-
-                        fbpHeader.className =
-                            'special-header-row';
-
-                        fbpHeader.innerHTML = `
-                            <td>Task</td>
-                            <td colspan="2">TOTAL ULP</td>
-                            <td># of Items in ULP</td>
-                            <td colspan="2">Time</td>
-                        `;
-
-                        tbody.appendChild(fbpHeader);
-
-                        tr.className =
-                            'section-header-row fbp-row';
-
-                        tr.innerHTML = `
-
-                            <td class="fbp-task-cell">
-                                <strong>
-                                    ${row.task}
-                                </strong>
-                            </td>
-
-                            <td
-                                colspan="2"
-                                class="fbp-ulp-cell"
-                            >
-                                <input
-                                    type="text"
-                                    value="${row.merchant}"
-                                    data-field="merchant"
-                                    data-index="${index}"
-                                    placeholder="TOTAL ULP"
-                                >
-                            </td>
-
-                            <td class="fbp-items-cell">
-                                <input
-                                    type="number"
-                                    value="${numberDisplay(row.items)}"
-                                    placeholder="0"
-                                    data-field="items"
-                                    data-index="${index}"
-                                    class="calc-items no-spinner"
-                                >
-                            </td>
-
-                            <td
-                                colspan="2"
-                                class="fbp-time-cell"
-                            >
-                                <input
-                                    type="number"
-                                    value="${numberDisplay(row.time)}"
-                                    placeholder="0"
-                                    data-field="time"
-                                    data-index="${index}"
-                                    class="calc-time no-spinner"
-                                >
-                            </td>
-
-                        `;
-                    }
-
-                    // =================================
-                    // DATADOG
-                    // =================================
-
-                    else if (row.type === 'datadog') {
-
-                        // Column header for the Datadog row
-                        const datadogHeader =
-                            document.createElement('tr');
-
-                        datadogHeader.className =
-                            'special-header-row';
-
-                        datadogHeader.innerHTML = `
-                            <td colspan="4">Task</td>
-                            <td>Items</td>
-                            <td>Time</td>
-                        `;
-
-                        tbody.appendChild(datadogHeader);
-
-                        tr.className =
-                            'section-header-row datadog-row';
-
-                        tr.innerHTML = `
-
-                            <td
-                                colspan="4"
-                                class="datadog-task-cell"
-                            >
-                                <strong>
-                                    ${row.task}
-                                </strong>
-                            </td>
-
-                            <td class="datadog-items-cell">
-                                <input
-                                    type="number"
-                                    value="${numberDisplay(row.items)}"
-                                    placeholder="0"
-                                    data-field="items"
-                                    data-index="${index}"
-                                    class="calc-items no-spinner"
-                                >
-                            </td>
-
-                            <td class="datadog-time-cell">
-                                <input
-                                    type="number"
-                                    value="${numberDisplay(row.time)}"
-                                    placeholder="0"
-                                    data-field="time"
-                                    data-index="${index}"
-                                    class="calc-time no-spinner"
-                                >
-                            </td>
-
-                        `;
-                    }
-
-                    // =================================
-                    // SPECIAL TASK (user-defined inputs)
-                    // =================================
-
-                    else if (row.type === 'special') {
-
-                        const fields =
-                            Array.isArray(row.fields)
-                                ? row.fields
-                                : [];
-
-                        const values =
-                            Array.isArray(row.values)
-                                ? row.values
-                                : [];
-
-                        // The 5 columns after "Task" are shared
-                        // between the inputs (like FBP / Datadog)
-                        const spans = fields.map((field, i) =>
-                            Math.floor(5 / fields.length) +
-                            (i < 5 % fields.length ? 1 : 0)
-                        );
-
-                        // Header row with the names the user chose
-                        const specialHeader =
-                            document.createElement('tr');
-
-                        specialHeader.className =
-                            'special-header-row';
-
-                        specialHeader.innerHTML =
-                            '<td>Task</td>' +
-                            fields.map((field, i) =>
-                                `<td colspan="${spans[i]}">${escapeHtml(field.label)}</td>`
-                            ).join('');
-
-                        tbody.appendChild(specialHeader);
-
-                        tr.className =
-                            'section-header-row special-row';
-
-                        tr.innerHTML =
-                            `<td class="special-task-cell"><strong>${escapeHtml(row.task)}</strong></td>` +
-                            fields.map((field, i) => {
-
-                                const isText =
-                                    field.role !== 'items' &&
-                                    field.role !== 'time';
-
-                                return `
-                                    <td colspan="${spans[i]}">
-                                        <input
-                                            type="${isText ? 'text' : 'number'}"
-                                            ${isText ? '' : 'step="any"'}
-                                            value="${escapeHtml(isText ? values[i] : numberDisplay(values[i]))}"
-                                            placeholder="${isText ? escapeHtml(field.label) : '0'}"
-                                            data-field="special"
-                                            data-slot="${i}"
-                                            data-index="${index}"
-                                            class="special-input${isText ? '' : ' no-spinner'}"
-                                        >
-                                    </td>
-                                `;
-
-                            }).join('');
-                    }
-
-                    tbody.appendChild(tr);
-                });
-
-            }
-
-            // =====================================
-            // NORMAL TASK ROWS
-            // =====================================
-
-            else {
-
-                let firstRendered = false;
-
-                group.forEach(item => {
-
-                    let row = item.row;
-                    let index = item.index;
-
-                    if (!row.visible) {
-                        return;
-                    }
-
-                    const tr =
-                        document.createElement('tr');
-
-                    tr.className =
-                        'production-row';
-
-                    let taskCellHTML = '';
-
-                    if (!firstRendered) {
-
-                        taskCellHTML = `
-                            <td
-                                rowspan="${visibleCount}"
-                                class="task-group-cell"
-                            >
-                                <div class="task-label-text">
-                                    ${taskKey}
-                                </div>
-                            </td>
-                        `;
-
-                        firstRendered = true;
-                    }
-
-                    let statusClass =
-                        row.status === 'DONE'
-                            ? 'status-done'
-                            : 'status-working';
-
-                    tr.innerHTML = `
-
-                        ${taskCellHTML}
-
-                        <td>
-                            <input
-                                type="text"
-                                value="${row.merchant}"
-                                data-field="merchant"
-                                data-index="${index}"
-                            >
-                        </td>
-
-                        <td>
-                            <input
-                                type="number"
-                                value="${numberDisplay(row.items)}"
-                                placeholder="0"
-                                data-field="items"
-                                data-index="${index}"
-                                class="calc-items no-spinner"
-                            >
-                        </td>
-
-                        <td>
-                            <input
-                                type="number"
-                                value="${numberDisplay(row.time)}"
-                                placeholder="0"
-                                data-field="time"
-                                data-index="${index}"
-                                class="calc-time no-spinner"
-                            >
-                        </td>
-
-                        <td>
-                            <input
-                                type="text"
-                                value="${row.rate}"
-                                data-field="rate"
-                                data-index="${index}"
-                            >
-                        </td>
-
-                        <td class="status-cell">
-
-                            <button
-                                class="
-                                    status-toggle-btn
-                                    ${statusClass}
-                                "
-                                data-index="${index}"
-                            >
-                                ${row.status || 'WORKING'}
-                            </button>
-
-                            <button
-                                class="row-hide-btn"
-                                data-index="${index}"
-                                title="Delete Row"
-                            >
-                                ×
-                            </button>
-
-                        </td>
-
-                    `;
-
-                    tbody.appendChild(tr);
-                });
-            }
-        });
-
-        attachListeners();
-        calculateTotals();
-    }
-
-    // =========================================
-    // SUBTOTAL ITEMS
-    // =========================================
-
-    function calcSubtotalItems(taskName) {
-
-        let sum = 0;
-
-        rowsData.forEach(r => {
-
-            if (
-                r.task === taskName &&
-                r.visible
-            ) {
-                sum += Number(r.items) || 0;
-            }
-        });
-
-        return sum;
-    }
-
-    // =========================================
-    // SUBTOTAL TIME
-    // =========================================
-
-    function calcSubtotalTime(taskName) {
-
-        let sum = 0;
-
-        rowsData.forEach(r => {
-
-            if (
-                r.task === taskName &&
-                r.visible
-            ) {
-                sum += Number(r.time) || 0;
-            }
-        });
-
-        return sum;
-    }
-
-
-
-// =========================================
-// EVENT LISTENERS
-// =========================================
-
-function attachListeners() {
-
-    // =====================================
-    // INPUTS
-    // =====================================
-
-    document
-        .querySelectorAll('.prod-table input')
-        .forEach(input => {
-
-            input.addEventListener('input', e => {
-
-                const idx =
-                    e.target.dataset.index;
-
-                const field =
-                    e.target.dataset.field;
-
-                if (
-                    idx === undefined ||
-                    !field
-                ) {
-                    return;
-                }
-
-                // Special task inputs are stored by position
-                if (field === 'special') {
-
-                    const slot =
-                        Number(e.target.dataset.slot);
-
-                    if (!Array.isArray(rowsData[idx].values)) {
-                        rowsData[idx].values = [];
-                    }
-
-                    rowsData[idx].values[slot] =
-                        e.target.value;
-
-                    saveProductionData();
-
-                    calculateTotals();
-
-                    return;
-                }
-
-                // Save changed value
-                rowsData[idx][field] =
-                    e.target.value;
-
-                // =================================
-                // AUTOMATIC TIME CALCULATION
-                // =================================
-                //
-                // Items or Rate changed:
-                // automatically recalculate Time.
-                //
-                // Time itself changed:
-                // keep the manually entered value.
-                // =================================
-
-                if (
-                    rowsData[idx].type !== 'fbp' &&
-                    rowsData[idx].type !== 'datadog' &&
-                    rowsData[idx].timeMode !== 'actual' &&
-                    (
-                        field === 'items' ||
-                        field === 'rate'
-                    )
-                ) {
-
-                    rowsData[idx].time =
-                        calculateTime(
-                            rowsData[idx].items,
-                            rowsData[idx].rate
-                        );
-
-                    // Update the Time input visually
-                    const timeInput =
-                        document.querySelector(
-                            `input.calc-time[data-index="${idx}"]`
-                        );
-
-                    if (timeInput) {
-                        timeInput.value =
-                            numberDisplay(rowsData[idx].time);
-                    }
-                }
-
-                // Save AFTER all calculations
-                saveProductionData();
-
-                // Update totals
-                calculateTotals();
-            });
-        });
-
-
-    // =====================================
-    // STATUS BUTTON
-    // =====================================
-
-    document
-        .querySelectorAll('.status-toggle-btn')
-        .forEach(btn => {
-
-            btn.addEventListener('click', e => {
-
-                const idx =
-                    e.currentTarget.dataset.index;
-
-                if (
-                    rowsData[idx].status === 'DONE'
-                ) {
-
-                    rowsData[idx].status =
-                        'WORKING';
-
-                } else {
-
-                    rowsData[idx].status =
-                        'DONE';
-                }
-
-                saveProductionData();
-
-                renderTable();
-            });
-        });
-
-
-    // =====================================
-    // DELETE / HIDE ROW
-    // =====================================
-
-    document
-        .querySelectorAll('.row-hide-btn')
-        .forEach(btn => {
-
-            btn.addEventListener('click', e => {
-
-                const idx =
-                    e.currentTarget.dataset.index;
-
-                rowsData[idx].visible = false;
-
-                saveProductionData();
-
-                renderTable();
-            });
-        });
-
-
-    // =====================================
-    // ADD ROW FROM SUBTOTAL
-    // =====================================
-
-    document
-        .querySelectorAll('.add-row-btn-subtotal')
-        .forEach(btn => {
-
-            btn.addEventListener('click', e => {
-
-                const taskName =
-                    e.currentTarget.dataset.task;
-
-                // Find subtotal
-                const subtotalIdx =
-                    rowsData.findIndex(
-                        r =>
-                            r.type === 'subtotal' &&
-                            r.task ===
-                                `TOTAL (${taskName})`
-                    );
-
-                // Get task settings
-                const taskSettings =
-                    getTaskSettings(taskName);
-
-                const defaultRt =
-                    taskSettings.timeMode === 'actual'
-                        ? ACTUAL_RATE
-                        : Number(taskSettings.rate) ||
-                    getDefaultRate(taskName) ||
-                    1;
-
-                // Create new row
-                const newRow = {
-
-                    task: taskName,
-
-                    merchant: '',
-
-                    items: '',
-
-                    time:
-                        taskSettings.timeMode === 'actual'
-                            ? taskSettings.actualTime
-                            : 0,
-
-                    rate: defaultRt,
-
-                    timeMode:
-                        taskSettings.timeMode,
-
-                    actualTime:
-                        taskSettings.actualTime,
-
-                    status: 'WORKING',
-
-                    visible: true
-                };
-
-                // Insert before subtotal
-                if (subtotalIdx !== -1) {
-
-                    rowsData.splice(
-                        subtotalIdx,
-                        0,
-                        newRow
-                    );
-
-                } else {
-
-                    rowsData.push(newRow);
-                }
-
-                saveProductionData();
-
-                renderTable();
-            });
-        });
-}
-
-    // =========================================
-    // TOTAL PRODUCTION
-    // =========================================
-
-
-    // Keep every TOTAL (task) row in sync while typing
-    function refreshSubtotals() {
-        document
-            .querySelectorAll('.subtotal-row')
-            .forEach(tr => {
-                const addBtn =
-                    tr.querySelector('.add-row-btn-subtotal');
-
-                if (!addBtn) return;
-
-                const taskName = addBtn.dataset.task;
-
-                const itemsInput =
-                    tr.querySelector('input.calc-items');
-
-                const timeInput =
-                    tr.querySelector('input.calc-time');
-
-                if (itemsInput) {
-                    itemsInput.value = calcSubtotalItems(taskName);
-                }
-
-                if (timeInput) {
-                    timeInput.value = calcSubtotalTime(taskName);
-                }
-            });
-    }
-
-    function calculateTotals() {
-
-        let totalItems = 0;
-        let totalTime = 0;
-
-        rowsData.forEach(row => {
-
-            // =====================================
-            // EXCLUDE SUBTOTAL ROWS
-            // =====================================
-
-            if (row.type === 'subtotal') {
-                return;
-            }
-
-            // =====================================
-            // SPECIAL TASKS
-            // Inputs set to "Items" add to TOTAL ITEMS,
-            // inputs set to "Time" add to TOTAL TIME.
-            // Plain inputs are not counted.
-            // =====================================
-
-            if (row.type === 'special') {
-
-                const specialEnabled =
-                    taskVisibility[row.task] !== undefined
-                        ? taskVisibility[row.task]
-                        : true;
-
-                if (
-                    specialEnabled &&
-                    row.visible &&
-                    Array.isArray(row.fields)
-                ) {
-                    row.fields.forEach((field, i) => {
-
-                        const amount =
-                            Number(
-                                row.values && row.values[i]
-                            ) || 0;
-
-                        if (field.role === 'time') {
-                            totalTime += amount;
-                        } else if (field.role === 'items') {
-                            totalItems += amount;
-                        }
+                value = originalEl.value || '';
+
+                // Date inputs hold ISO text (2026-10-07); show them the way
+                // the app displays them (e.g. 10/07/2026).
+                if (originalEl.type === 'date' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+                    const [y, m, d] = value.split('-').map(Number);
+                    value = new Date(y, m - 1, d).toLocaleDateString(undefined, {
+                        month: '2-digit', day: '2-digit', year: 'numeric'
                     });
                 }
+            }
 
+            const styles = window.getComputedStyle(originalEl);
+            const replacement = document.createElement('div');
+
+            replacement.textContent = value;
+            COPIED_INPUT_STYLES.forEach(prop => { replacement.style[prop] = styles[prop]; });
+
+            Object.assign(replacement.style, {
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent:
+                    styles.textAlign === 'center' ? 'center'
+                        : styles.textAlign === 'right' ? 'flex-end'
+                            : 'flex-start',
+                overflow: 'visible',
+                whiteSpace: 'nowrap'
+            });
+
+            replacement.className = clonedEl.className;
+
+            // Remember the original height so landscape mode can resize these
+            replacement.setAttribute('data-shot-input', '1');
+            replacement.setAttribute('data-shot-height', String(originalEl.offsetHeight));
+
+            clonedEl.replaceWith(replacement);
+        });
+    }
+
+    // Long tables: rebuild the cloned table as two side-by-side columns.
+    // Returns true on success.
+    function buildLandscapeLayout(clone) {
+        const tableContainer = clone.querySelector('.table-container');
+        const table = clone.querySelector('.prod-table');
+
+        if (!tableContainer || !table || !table.tBodies[0]) return false;
+
+        const rows = Array.from(table.tBodies[0].rows);
+        if (rows.length < 2) return false;
+
+        const hasLabelCell = tr =>
+            Array.from(tr.cells).some(c => c.classList.contains('task-group-cell'));
+        const isSubtotal = tr => tr.classList.contains('subtotal-row');
+
+        // A new task block starts at a task label, FBP row or Datadog row
+        const startsBlock = tr =>
+            hasLabelCell(tr) || tr.classList.contains('special-header-row');
+
+        // ---- pick where to cut the table in two ----
+        // Prefer cutting between tasks; cut inside a long task only
+        // when that balances the two columns much better.
+        const ideal = rows.length / 2;
+        let cut = -1;
+        let bestScore = Infinity;
+
+        for (let p = 1; p < rows.length; p++) {
+            if (isSubtotal(rows[p])) continue;                                // keep TOTAL with its rows
+            if (rows[p - 1].classList.contains('special-header-row')) continue; // keep header + row together
+
+            const score = Math.abs(p - ideal) + (startsBlock(rows[p]) ? 0 : 1.5);
+
+            if (score < bestScore) {
+                bestScore = score;
+                cut = p;
+            }
+        }
+
+        if (cut < 0) return false;
+
+        // ---- cutting inside a task: repeat its label on the right side ----
+        if (!startsBlock(rows[cut])) {
+            let start = cut;
+            while (start > 0 && !startsBlock(rows[start])) start--;
+
+            const labelCell = Array.from(rows[start].cells)
+                .find(c => c.classList.contains('task-group-cell'));
+
+            if (!labelCell) return false;
+
+            let end = cut;
+            while (end < rows.length && !isSubtotal(rows[end])) end++;
+
+            const rightLabel = labelCell.cloneNode(true);
+
+            labelCell.rowSpan = cut - start;
+            rightLabel.rowSpan = end - cut;
+            rows[cut].insertBefore(rightLabel, rows[cut].firstChild);
+        }
+
+        // ---- build the two columns ----
+        const makeColumn = rowList => {
+            const wrap = document.createElement('div');
+            wrap.className = 'table-container landscape-col';
+
+            const newTable = document.createElement('table');
+            newTable.className = table.className;
+
+            if (table.tHead) newTable.appendChild(table.tHead.cloneNode(true));
+
+            const tbody = document.createElement('tbody');
+            rowList.forEach(tr => tbody.appendChild(tr));
+            newTable.appendChild(tbody);
+            wrap.appendChild(newTable);
+
+            return wrap;
+        };
+
+        const layout = document.createElement('div');
+        layout.className = 'landscape-columns';
+        layout.appendChild(makeColumn(rows.slice(0, cut)));
+        layout.appendChild(makeColumn(rows.slice(cut)));
+
+        tableContainer.replaceWith(layout);
+        return true;
+    }
+
+    function shouldUseLandscape() {
+        const mode = getScreenshotLayoutMode();
+        const rowCount = document.querySelectorAll('#prodTableBody tr').length;
+
+        return mode === 'landscape' ||
+            (mode === 'auto' && rowCount >= CONFIG.screenshot.landscapeRowThreshold);
+    }
+
+    // Table cells are narrower in columns, so replaced inputs fill their
+    // cell instead of keeping their old pixel widths.
+    function stretchReplacedInputs(clone) {
+        clone.querySelectorAll('.prod-table [data-shot-input]').forEach(el => {
+            el.style.boxSizing = 'border-box';
+            el.style.width = '100%';
+            el.style.height = `${el.getAttribute('data-shot-height')}px`;
+        });
+    }
+
+    // A long merchant name used to spill over its neighbours. Shrink the
+    // text until it fits; if it still doesn't fit, clip it at the box edge.
+    function fitTextInBoxes(clone) {
+        clone.querySelectorAll('.prod-table [data-shot-input]').forEach(el => {
+            el.style.overflow = 'hidden';
+
+            if (el.scrollWidth <= el.clientWidth + 1) return;
+
+            let fontSize = parseFloat(window.getComputedStyle(el).fontSize) || 14;
+
+            while (el.scrollWidth > el.clientWidth + 1 &&
+                   fontSize > CONFIG.screenshot.minFontSize) {
+                fontSize -= 0.5;
+                el.style.fontSize = `${fontSize}px`;
+            }
+
+            // Still too long: show the start of the text
+            if (el.scrollWidth > el.clientWidth + 1) {
+                el.style.justifyContent = 'flex-start';
+            }
+        });
+    }
+
+    const nextFrame = () => new Promise(resolve => requestAnimationFrame(() => resolve()));
+    const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+    function downloadCanvas(canvas) {
+        canvas.toBlob(blob => {
+            if (!blob) {
+                alert('Could not create screenshot.');
                 return;
             }
 
-            // =====================================
-            // CHECK TASK VISIBILITY
-            // =====================================
+            const now = new Date();
+            const mm = String(now.getMonth() + 1).padStart(2, '0');
+            const dd = String(now.getDate()).padStart(2, '0');
 
-            let isEnabled = true;
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.download = `${getNameForFile()} ${mm}.${dd}.${now.getFullYear()}.png`;
+            link.href = url;
+            link.click();
 
-            // FBP
-            if (row.type === 'fbp') {
-
-                isEnabled =
-                    taskVisibility['FBP Checks'] !== undefined
-                        ? taskVisibility['FBP Checks']
-                        : true;
-
-            }
-
-            // Datadog
-            else if (row.type === 'datadog') {
-
-                isEnabled =
-                    taskVisibility['Datadog'] !== undefined
-                        ? taskVisibility['Datadog']
-                        : true;
-
-            }
-
-            // Normal tasks
-            else {
-
-                isEnabled =
-                    taskVisibility[row.task] !== undefined
-                        ? taskVisibility[row.task]
-                        : true;
-            }
-
-            // =====================================
-            // TOTAL ITEMS
-            // =====================================
-            // FBP and Datadog ITEMS are NOT counted.
-
-            if (
-                isEnabled &&
-                row.visible &&
-                row.items !== '' &&
-                row.type !== 'fbp' &&
-                row.type !== 'datadog'
-            ) {
-                totalItems +=
-                    Number(row.items) || 0;
-            }
-
-            // =====================================
-            // TOTAL TIME
-            // =====================================
-            // FBP and Datadog TIME ARE counted.
-
-            if (
-                isEnabled &&
-                row.visible &&
-                row.time !== ''
-            ) {
-                totalTime +=
-                    Number(row.time) || 0;
-            }
-
-        });
-
-        // =====================================
-        // DISPLAY TOTALS
-        // =====================================
-
-        document.getElementById(
-            'totalItems'
-        ).innerText = totalItems;
-
-        document.getElementById(
-            'totalTime'
-        ).innerText = totalTime;
-
-        // =====================================
-        // UPDATE MINUTES REMAINING
-        // =====================================
-
-        refreshSubtotals();
-
-        updateOTMinutesDisplay(totalTime);
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }, 'image/png');
     }
 
-    // =========================================
-    // TASK BUTTON MAPPING
-    // =========================================
-
-    const taskButtonMapping = {
-
-        'TAG': 'Tag',
-
-        'TAGLITE': 'TagLite',
-
-        'QC LITE': 'QC Lite',
-
-        'TAG QC': 'Tag QC',
-
-        'IMAGE QC': 'Image',
-
-        'FBP': 'FBP Checks',
-
-        'DATADOG': 'Datadog'
-    };
-
-    // =========================================
-    // TASK TOGGLES
-    // =========================================
-
-    document
-        .querySelectorAll('.toggle-btn')
-        .forEach(btn => {
-
-            let btnText =
-                btn.innerText.trim();
-
-            let internalKey =
-                taskButtonMapping[btnText];
-
-            if (
-                internalKey &&
-                taskVisibility[internalKey]
-            ) {
-
-                btn.classList.add('active');
-
-            } else {
-
-                btn.classList.remove('active');
-            }
-
-            btn.addEventListener(
-                'click',
-                () => {
-
-                    btn.classList.toggle(
-                        'active'
-                    );
-
-                    if (internalKey) {
-
-                        taskVisibility[
-                            internalKey
-                        ] =
-                            btn.classList.contains(
-                                'active'
-                            );
-
-                        renderTable();
-                    }
-                }
-            );
-        });
-
-
-    // =========================================
-    // DELETE / RESTORE BUILT-IN TASKS
-    // (custom tasks already have their own x button)
-    // =========================================
-    const DELETED_BUILTINS_KEY = 'productionTrackerDeletedTasks';
-
-    let deletedBuiltIns = [];
-
-    try {
-        const savedDeleted =
-            JSON.parse(localStorage.getItem(DELETED_BUILTINS_KEY));
-
-        if (Array.isArray(savedDeleted)) {
-            deletedBuiltIns = savedDeleted.filter(
-                key => BUILT_IN_TASKS.includes(key)
-            );
-        }
-    } catch (error) {
-        deletedBuiltIns = [];
-    }
-
-    function saveDeletedBuiltIns() {
-        try {
-            localStorage.setItem(
-                DELETED_BUILTINS_KEY,
-                JSON.stringify(deletedBuiltIns)
-            );
-        } catch (error) {
-            console.warn('Could not save deleted tasks:', error);
-        }
-    }
-
-    const restoreTasksBtn = document.getElementById('restoreTasksBtn');
-
-    function applyBuiltInDeletions() {
-        document
-            .querySelectorAll('.builtin-task-control')
-            .forEach(control => {
-                const btn = control.querySelector('.toggle-btn');
-                const key = taskButtonMapping[btn.innerText.trim()];
-                const isDeleted = deletedBuiltIns.includes(key);
-
-                control.style.display = isDeleted ? 'none' : '';
-
-                if (isDeleted) {
-                    taskVisibility[key] = false;
-                    btn.classList.remove('active');
-                }
-            });
-
-        if (restoreTasksBtn) {
-            restoreTasksBtn.hidden = deletedBuiltIns.length === 0;
-            restoreTasksBtn.textContent =
-                `↺ RESTORE DELETED TASKS (${deletedBuiltIns.length})`;
-        }
-    }
-
-    // Wrap each built-in task button together with an x button
-    document
-        .querySelectorAll('.task-toggles > .toggle-btn')
-        .forEach(btn => {
-            const label = btn.innerText.trim();
-            const key = taskButtonMapping[label];
-            if (!key) return;
-
-            const control = document.createElement('div');
-            control.className = 'builtin-task-control';
-
-            const deleteBtn = document.createElement('button');
-            deleteBtn.type = 'button';
-            deleteBtn.className = 'builtin-task-delete-btn';
-            deleteBtn.textContent = '×';
-            deleteBtn.title = `Delete ${label}`;
-
-            btn.parentNode.insertBefore(control, btn);
-            control.appendChild(btn);
-            control.appendChild(deleteBtn);
-
-            deleteBtn.addEventListener('click', event => {
-                event.preventDefault();
-                event.stopPropagation();
-
-                const confirmed = confirm(
-                    `Delete the task "${label}"?\n\n` +
-                    `It will be removed from the task list and left out ` +
-                    `of your totals. You can bring it back any time with ` +
-                    `the "Restore deleted tasks" button.`
-                );
-
-                if (!confirmed) return;
-
-                if (!deletedBuiltIns.includes(key)) {
-                    deletedBuiltIns.push(key);
-                }
-
-                saveDeletedBuiltIns();
-                applyBuiltInDeletions();
-                renderTable();
-            });
-        });
-
-    if (restoreTasksBtn) {
-        restoreTasksBtn.addEventListener('click', () => {
-            deletedBuiltIns = [];
-            saveDeletedBuiltIns();
-            applyBuiltInDeletions();
-            renderTable();
-        });
-    }
-
-    applyBuiltInDeletions();
-
-    // =========================================
-    // CUSTOM TASK BUTTONS
-    // =========================================
-
-    renderTaskButtons();
-
-    // =========================================
-    // INITIAL RENDER
-    // =========================================
-
-    renderTable();
-
-// =========================================
-// OVERTIME BUTTONS
-// =========================================
-
-const otButtons =
-    document.querySelectorAll('.ot-btn');
-
-otButtons.forEach(btn => {
-
-    btn.addEventListener('click', () => {
-
-        // Remove active state from all buttons
-        otButtons.forEach(button => {
-            button.classList.remove('active');
-        });
-
-        // Activate selected button
-        btn.classList.add('active');
-
-        // Store selected OT minutes
-        selectedOT =
-            Number(btn.dataset.ot) || 0;
-
-        saveProductionData();
-
-        // Get current production time
-        const totalTimeElement =
-            document.getElementById('totalTime');
-
-        const totalTime =
-            Number(totalTimeElement.innerText) || 0;
-
-        // Recalculate remaining minutes
-        updateOTMinutesDisplay(totalTime);
-    });
-        // Restore saved OT button appearance
-    otButtons.forEach(btn => {
-
-        const otValue =
-            Number(btn.dataset.ot) || 0;
-
-        if (otValue === selectedOT) {
-            btn.classList.add('active');
-        } else {
-            btn.classList.remove('active');
-        }
-    });
-
-});
-
-
-    // =========================================
-    // COMMA SEPARATOR TOOL
-    // =========================================
-
-    const rawInputList =
-        document.getElementById(
-            'rawInputList'
-        );
-
-    const formattedOutput =
-        document.getElementById(
-            'formattedOutput'
-        );
-
-    rawInputList.addEventListener(
-        'input',
-        () => {
-
-            const lines =
-                rawInputList.value
-                    .split('\n')
-                    .map(i => i.trim())
-                    .filter(
-                        i => i.length > 0
-                    );
-
-            formattedOutput.innerText =
-                lines.join(', ');
-        }
-    );
-
-    // =========================================
-    // CLEAR COMMA TOOL
-    // =========================================
-
-    document
-        .getElementById('clearToolBtn')
-        .addEventListener(
-            'click',
-            () => {
-
-                rawInputList.value = '';
-
-                formattedOutput.innerText =
-                    '';
-            }
-        );
-
-    // =========================================
-    // COPY OUTPUT
-    // =========================================
-
-    document
-        .getElementById('copyOutputBtn')
-        .addEventListener(
-            'click',
-            () => {
-
-                navigator.clipboard.writeText(
-                    formattedOutput.innerText
-                );
-
-                alert(
-                    'Copied to clipboard!'
-                );
-            }
-        );
-
-    // =========================================
-    // CLEAR ALL PRODUCTION DATA
-    // =========================================
-
-    document
-        .getElementById(
-            'clearProductionBtn'
-        )
-        .addEventListener(
-            'click',
-            () => {
-
-                if (
-                    confirm(
-                        'Clear all production input values?'
-                    )
-                ) {
-
-                    rowsData.forEach(r => {
-
-                        // FBP
-                        if (
-                            r.type === 'fbp'
-                        ) {
-
-                            r.merchant = '';
-                            r.items = '';
-                            r.time = '';
-
-                        }
-
-                        // Datadog
-                        else if (
-                            r.type === 'datadog'
-                        ) {
-
-                            r.items = '';
-                            r.time = '';
-
-                        }
-
-                        // Special task: empty every input
-                        else if (
-                            r.type === 'special'
-                        ) {
-
-                            r.values = (r.fields || []).map(() => '');
-
-                        }
-
-                        // Normal task
-                        else if (
-                            r.type !== 'subtotal'
-                        ) {
-
-                            r.items = '';
-
-                            r.time =
-                                r.timeMode === 'actual'
-                                    ? r.actualTime
-                                    : '';
-
-                            r.merchant = '';
-
-                            r.rate =
-                                customTaskSettings[r.task]
-                                    ? customTaskSettings[r.task].rate
-                                    : getDefaultRate(r.task);
-
-                            r.status =
-                                'WORKING';
-                        }
-                    });
-
-                    saveProductionData();
-                    renderTable();
-                }
-            }
-        );
-
-            // =========================================
-            // SHIFT SELECTOR
-            // =========================================
-
-            const shiftSelector =
-                document.getElementById('shiftSelector');
-
-            if (shiftSelector) {
-
-                shiftSelector.addEventListener('change', () => {
-
-                    localStorage.setItem(
-                        SHIFT_KEY,
-                        shiftSelector.value
-                    );
-
-                    console.log(
-                        'Shift selected:',
-                        shiftSelector.value
-                    );
-
-                });
-
-            }
-
-});
-
-// =========================================
-// CALCULATOR
-// Works with the on-screen buttons AND the
-// physical keyboard / numpad.
-// =========================================
-document.addEventListener('DOMContentLoaded', () => {
-
-    const card = document.getElementById('calculatorCard');
-    const displayEl = document.getElementById('calcDisplay');
-    const historyEl = document.getElementById('calcHistory');
-
-    if (!card || !displayEl || !historyEl) return;
-
-    const SYMBOLS = { '+': '+', '-': '−', '*': '×', '/': '÷' };
-    const MAX_DIGITS = 15;
-
-    let current = '0';      // number being typed / shown
-    let previous = null;    // left-hand value waiting for an operator
-    let operator = null;    // '+', '-', '*', '/'
-    let overwrite = false;  // next digit starts a new number
-    let hasError = false;
-
-    // ---------- helpers ----------
-
-    function clean(number) {
-        // Removes floating point noise (0.1 + 0.2 -> 0.3)
-        return String(parseFloat(number.toPrecision(12)));
-    }
-
-    function compute(a, op, b) {
-        switch (op) {
-            case '+': return a + b;
-            case '-': return a - b;
-            case '*': return a * b;
-            case '/': return b === 0 ? NaN : a / b;
-        }
-        return b;
-    }
-
-    function render() {
-        displayEl.textContent = hasError ? 'Error' : current;
-
-        card.querySelectorAll('[data-calc-op]').forEach(btn => {
-            btn.classList.toggle(
-                'active',
-                !hasError && operator === btn.dataset.calcOp && overwrite
-            );
-        });
-    }
-
-    function setHistory(text) {
-        historyEl.innerHTML = text || '&nbsp;';
-    }
-
-    function resetAll() {
-        current = '0';
-        previous = null;
-        operator = null;
-        overwrite = false;
-        hasError = false;
-        setHistory('');
-        render();
-    }
-
-    function fail() {
-        hasError = true;
-        current = '0';
-        previous = null;
-        operator = null;
-        overwrite = true;
-        setHistory('');
-        render();
-    }
-
-    // ---------- actions ----------
-
-    function inputDigit(digit) {
-        if (hasError) resetAll();
-
-        if (overwrite) {
-            current = digit;
-            overwrite = false;
-        } else if (current === '0') {
-            current = digit;
-        } else if (current === '-0') {
-            current = '-' + digit;
-        } else if (current.replace(/[-.]/g, '').length < MAX_DIGITS) {
-            current += digit;
-        }
-        render();
-    }
-
-    function inputDot() {
-        if (hasError) resetAll();
-
-        if (overwrite) {
-            current = '0.';
-            overwrite = false;
-        } else if (!current.includes('.')) {
-            current += '.';
-        }
-        render();
-    }
-
-    function inputOperator(op) {
-        if (hasError) return;
-
-        const value = parseFloat(current);
-
-        if (operator && previous !== null && !overwrite) {
-            const result = compute(previous, operator, value);
-            if (!Number.isFinite(result)) return fail();
-            previous = result;
-            current = clean(result);
-        } else {
-            previous = value;
-        }
-
-        operator = op;
-        overwrite = true;
-        setHistory(`${clean(previous)} ${SYMBOLS[op]}`);
-        render();
-    }
-
-    function equals() {
-        if (hasError || operator === null || previous === null) return;
-
-        const right = parseFloat(current);
-        const result = compute(previous, operator, right);
-
-        if (!Number.isFinite(result)) return fail();
-
-        setHistory(`${clean(previous)} ${SYMBOLS[operator]} ${clean(right)} =`);
-        current = clean(result);
-        previous = null;
-        operator = null;
-        overwrite = true;
-        render();
-    }
-
-    function backspace() {
-        if (hasError) return resetAll();
-        if (overwrite) return;
-
-        current = current.slice(0, -1);
-        if (current === '' || current === '-') current = '0';
-        render();
-    }
-
-    function negate() {
-        if (hasError) return;
-        if (current === '0') return;
-
-        current = current.startsWith('-') ? current.slice(1) : '-' + current;
-        render();
-    }
-
-    function percent() {
-        if (hasError) return;
-
-        current = clean(parseFloat(current) / 100);
-        overwrite = true;
-        render();
-    }
-
-    const ACTIONS = {
-        clear: resetAll,
-        backspace: backspace,
-        percent: percent,
-        negate: negate,
-        dot: inputDot,
-        equals: equals
-    };
-
-    // ---------- on-screen buttons ----------
-
-    card.addEventListener('click', event => {
-        const btn = event.target.closest('.calc-btn');
-        if (!btn) return;
-
-        if (btn.dataset.calcDigit !== undefined) {
-            inputDigit(btn.dataset.calcDigit);
-        } else if (btn.dataset.calcOp !== undefined) {
-            inputOperator(btn.dataset.calcOp);
-        } else if (btn.dataset.calcAction) {
-            ACTIONS[btn.dataset.calcAction]();
-        }
-    });
-
-    // ---------- keyboard / numpad ----------
-
-    function flash(selector) {
-        const btn = card.querySelector(selector);
-        if (!btn) return;
-        btn.classList.add('pressed');
-        setTimeout(() => btn.classList.remove('pressed'), 120);
-    }
-
-    document.addEventListener('keydown', event => {
-
-        // Leave browser shortcuts alone (Ctrl+C, etc.)
-        if (event.ctrlKey || event.metaKey || event.altKey) return;
-
-        // Don't steal keys while a task dialog is open
-        if (
-            document.getElementById('newTaskOverlay') ||
-            document.getElementById('specialTaskOverlay')
-        ) return;
-
-        const target = event.target;
-
-        // Never steal keys while typing in a field
-        if (
-            target.closest &&
-            target.closest('input, textarea, select, [contenteditable="true"]')
-        ) {
+    async function captureProduction(button) {
+        const area = $('screenshotArea');
+
+        if (!area) {
+            alert('Screenshot area not found.');
             return;
         }
 
-        const code = event.code;
+        if (typeof html2canvas !== 'function') {
+            Log.error('html2canvas is not loaded (CDN blocked or offline?)');
+            alert('The screenshot library did not load. Check your internet connection and reload the page.');
+            return;
+        }
+
+        const originalText = button.innerText;
+        button.innerText = 'CAPTURING...';
+        button.disabled = true;
+
+        let clone = null;
+
+        try {
+            let width = Math.ceil(area.getBoundingClientRect().width);
+            let height = Math.ceil(area.scrollHeight);
+            const background = getComputedStyle(document.body).backgroundColor;
+
+            clone = createScreenshotClone(area, width, height, background);
+            replaceInputsWithText(area, clone);
+
+            const isLandscape = shouldUseLandscape() && buildLandscapeLayout(clone);
+
+            if (isLandscape) {
+                width = CONFIG.screenshot.landscapeWidth;
+                setCloneWidth(clone, width);
+                clone.style.height = 'auto';
+                stretchReplacedInputs(clone);
+            }
+
+            // Give the browser time to lay out the clone
+            await nextFrame();
+            await wait(100);
+
+            fitTextInBoxes(clone);
+
+            if (isLandscape) {
+                height = Math.ceil(clone.getBoundingClientRect().height);
+            }
+
+            Log.debug('screenshot', { width, height, isLandscape });
+
+            const canvas = await html2canvas(clone, {
+                backgroundColor: background,
+                scale: 1,
+                useCORS: true,
+                logging: false,
+                width,
+                height,
+                scrollX: 0,
+                scrollY: 0
+            });
+
+            downloadCanvas(canvas);
+
+        } catch (error) {
+            Log.error('Screenshot error:', error);
+            alert('Something went wrong while taking the screenshot.');
+        } finally {
+            if (clone) clone.remove();
+            button.innerText = originalText;
+            button.disabled = false;
+        }
+    }
+
+    function initScreenshot() {
+        const layoutSelect = $('screenshotLayoutSelect');
+
+        if (layoutSelect) {
+            layoutSelect.value = getScreenshotLayoutMode();
+            layoutSelect.addEventListener('change', () => {
+                Store.setRaw(STORAGE_KEYS.screenshotLayout, layoutSelect.value);
+            });
+        }
+
+        const button = $('screenshotProductionBtn');
+        if (button) button.addEventListener('click', () => captureProduction(button));
+    }
+
+    /* =================================================================
+     * 14. TOOLS  (comma separator, clear all)
+     * ================================================================= */
+
+    function initCommaTool() {
+        const rawInput = $('rawInputList');
+        const output = $('formattedOutput');
+        if (!rawInput || !output) return;
+
+        rawInput.addEventListener('input', () => {
+            output.innerText = rawInput.value
+                .split('\n')
+                .map(line => line.trim())
+                .filter(line => line.length > 0)
+                .join(', ');
+        });
+
+        const clearBtn = $('clearToolBtn');
+        if (clearBtn) {
+            clearBtn.addEventListener('click', () => {
+                rawInput.value = '';
+                output.innerText = '';
+            });
+        }
+
+        const copyBtn = $('copyOutputBtn');
+        if (copyBtn) {
+            copyBtn.addEventListener('click', async () => {
+                try {
+                    await navigator.clipboard.writeText(output.innerText);
+                    alert('Copied to clipboard!');
+                } catch (error) {
+                    Log.error('Clipboard write failed', error);
+                    alert('Could not copy to the clipboard.');
+                }
+            });
+        }
+    }
+
+    function clearProductionValues() {
+        state.rows.forEach(r => {
+            if (r.type === 'subtotal') return;
+
+            if (r.type === 'fbp') {
+                r.merchant = '';
+                r.items = '';
+                r.time = '';
+            } else if (r.type === 'datadog') {
+                r.items = '';
+                r.time = '';
+            } else if (r.type === 'special') {
+                r.values = (r.fields || []).map(() => '');
+            } else {
+                r.items = '';
+                r.time = r.timeMode === 'actual' ? r.actualTime : '';
+                r.merchant = '';
+                r.rate = state.customTasks[r.task]
+                    ? state.customTasks[r.task].rate
+                    : getDefaultRate(r.task);
+                r.status = 'WORKING';
+            }
+        });
+    }
+
+    function initClearAll() {
+        const button = $('clearProductionBtn');
+        if (!button) return;
+
+        button.addEventListener('click', () => {
+            if (!confirm('Clear all production input values?')) return;
+
+            clearProductionValues();
+            commitAndRender();
+        });
+    }
+
+    /* =================================================================
+     * 15. CALCULATOR  (on-screen buttons + physical keyboard / numpad)
+     * ================================================================= */
+
+    function initCalculator() {
+        const card = $('calculatorCard');
+        const displayEl = $('calcDisplay');
+        const historyEl = $('calcHistory');
+
+        if (!card || !displayEl || !historyEl) return;
+
+        const SYMBOLS = { '+': '+', '-': '−', '*': '×', '/': '÷' };
+        const MAX_DIGITS = 15;
+
+        let current = '0';       // number being typed / shown
+        let previous = null;     // left-hand value waiting for an operator
+        let operator = null;     // '+', '-', '*', '/'
+        let overwrite = false;   // next digit starts a new number
+        let hasError = false;
+
+        // Removes floating point noise (0.1 + 0.2 -> 0.3)
+        const clean = number => String(parseFloat(number.toPrecision(12)));
+
+        function compute(a, op, b) {
+            switch (op) {
+                case '+': return a + b;
+                case '-': return a - b;
+                case '*': return a * b;
+                case '/': return b === 0 ? NaN : a / b;
+            }
+            return b;
+        }
+
+        function render() {
+            displayEl.textContent = hasError ? 'Error' : current;
+
+            card.querySelectorAll('[data-calc-op]').forEach(btn => {
+                btn.classList.toggle(
+                    'active',
+                    !hasError && operator === btn.dataset.calcOp && overwrite
+                );
+            });
+        }
+
+        const setHistory = text => { historyEl.innerHTML = text || '&nbsp;'; };
+
+        function resetAll() {
+            current = '0';
+            previous = null;
+            operator = null;
+            overwrite = false;
+            hasError = false;
+            setHistory('');
+            render();
+        }
+
+        function fail() {
+            hasError = true;
+            current = '0';
+            previous = null;
+            operator = null;
+            overwrite = true;
+            setHistory('');
+            render();
+        }
+
+        function inputDigit(digit) {
+            if (hasError) resetAll();
+
+            if (overwrite) {
+                current = digit;
+                overwrite = false;
+            } else if (current === '0') {
+                current = digit;
+            } else if (current === '-0') {
+                current = '-' + digit;
+            } else if (current.replace(/[-.]/g, '').length < MAX_DIGITS) {
+                current += digit;
+            }
+            render();
+        }
+
+        function inputDot() {
+            if (hasError) resetAll();
+
+            if (overwrite) {
+                current = '0.';
+                overwrite = false;
+            } else if (!current.includes('.')) {
+                current += '.';
+            }
+            render();
+        }
+
+        function inputOperator(op) {
+            if (hasError) return;
+
+            const value = parseFloat(current);
+
+            if (operator && previous !== null && !overwrite) {
+                const result = compute(previous, operator, value);
+                if (!Number.isFinite(result)) return fail();
+                previous = result;
+                current = clean(result);
+            } else {
+                previous = value;
+            }
+
+            operator = op;
+            overwrite = true;
+            setHistory(`${clean(previous)} ${SYMBOLS[op]}`);
+            render();
+        }
+
+        function equals() {
+            if (hasError || operator === null || previous === null) return;
+
+            const right = parseFloat(current);
+            const result = compute(previous, operator, right);
+
+            if (!Number.isFinite(result)) return fail();
+
+            setHistory(`${clean(previous)} ${SYMBOLS[operator]} ${clean(right)} =`);
+            current = clean(result);
+            previous = null;
+            operator = null;
+            overwrite = true;
+            render();
+        }
+
+        function backspace() {
+            if (hasError) return resetAll();
+            if (overwrite) return;
+
+            current = current.slice(0, -1);
+            if (current === '' || current === '-') current = '0';
+            render();
+        }
+
+        function negate() {
+            if (hasError || current === '0') return;
+            current = current.startsWith('-') ? current.slice(1) : '-' + current;
+            render();
+        }
+
+        function percent() {
+            if (hasError) return;
+            current = clean(parseFloat(current) / 100);
+            overwrite = true;
+            render();
+        }
+
+        const ACTIONS = {
+            clear: resetAll,
+            backspace,
+            percent,
+            negate,
+            dot: inputDot,
+            equals
+        };
+
+        // ---------- on-screen buttons ----------
+
+        card.addEventListener('click', event => {
+            const btn = event.target.closest('.calc-btn');
+            if (!btn) return;
+
+            if (btn.dataset.calcDigit !== undefined) {
+                inputDigit(btn.dataset.calcDigit);
+            } else if (btn.dataset.calcOp !== undefined) {
+                inputOperator(btn.dataset.calcOp);
+            } else if (btn.dataset.calcAction && ACTIONS[btn.dataset.calcAction]) {
+                ACTIONS[btn.dataset.calcAction]();
+            }
+        });
+
+        // ---------- keyboard / numpad ----------
+
+        function flash(selector) {
+            const btn = card.querySelector(selector);
+            if (!btn) return;
+            btn.classList.add('pressed');
+            setTimeout(() => btn.classList.remove('pressed'), 120);
+        }
 
         // Read the physical numpad key by its code so it works whether
         // NumLock is on or off. Everything else uses event.key.
@@ -3685,87 +2033,205 @@ document.addEventListener('DOMContentLoaded', () => {
             NumpadEnter: 'Enter'
         };
 
-        let key = event.key;
+        document.addEventListener('keydown', event => {
+            // Leave browser shortcuts alone (Ctrl+C, etc.)
+            if (event.ctrlKey || event.metaKey || event.altKey) return;
 
-        if (/^Numpad[0-9]$/.test(code)) {
-            key = code.slice(-1);
-        } else if (NUMPAD_KEYS[code]) {
-            key = NUMPAD_KEYS[code];
+            // Don't steal keys while a dialog is open
+            if (document.querySelector('.modal-overlay')) return;
+
+            const target = event.target;
+
+            // Never steal keys while typing in a field
+            if (target.closest &&
+                target.closest('input, textarea, select, [contenteditable="true"]')) {
+                return;
+            }
+
+            const code = event.code;
+            let key = event.key;
+
+            if (/^Numpad[0-9]$/.test(code)) key = code.slice(-1);
+            else if (NUMPAD_KEYS[code]) key = NUMPAD_KEYS[code];
+
+            // Enter on some other focused button should still activate that button
+            const onOtherControl =
+                target.closest && target.closest('button, a') && !card.contains(target);
+
+            if (/^[0-9]$/.test(key)) {
+                inputDigit(key);
+                flash(`[data-calc-digit="${key}"]`);
+            } else if (key === '.' || key === ',' || code === 'NumpadDecimal') {
+                inputDot();
+                flash('[data-calc-action="dot"]');
+            } else if (key === '+' || key === '-' || key === '*' || key === '/') {
+                inputOperator(key);
+                flash(`[data-calc-op="${key}"]`);
+            } else if (key === 'Enter' || key === '=') {
+                if (key === 'Enter' && onOtherControl) return;
+                equals();
+                flash('[data-calc-action="equals"]');
+            } else if (key === 'Backspace') {
+                backspace();
+                flash('[data-calc-action="backspace"]');
+            } else if (key === 'Escape' || key === 'Delete') {
+                resetAll();
+                flash('[data-calc-action="clear"]');
+            } else if (key === '%') {
+                percent();
+                flash('[data-calc-action="percent"]');
+            } else {
+                return;
+            }
+
+            // Stops "/" quick-find, page scrolling, and a focused button
+            // "clicking" itself when Enter is pressed.
+            event.preventDefault();
+        });
+
+        render();
+    }
+
+    /* =================================================================
+     * 16. THEME
+     * ================================================================= */
+
+    function initTheme() {
+        const swatches = document.querySelectorAll('.theme-swatch');
+
+        function applyTheme(theme) {
+            if (!THEMES.includes(theme)) theme = 'midnight';
+
+            document.documentElement.dataset.theme = theme;
+
+            swatches.forEach(btn => {
+                const isActive = btn.dataset.theme === theme;
+                btn.classList.toggle('active', isActive);
+                btn.setAttribute('aria-pressed', String(isActive));
+            });
         }
 
-        // Enter on some other focused button should still activate that button
-        const onOtherControl =
-            target.closest &&
-            target.closest('button, a') &&
-            !card.contains(target);
-
-        if (/^[0-9]$/.test(key)) {
-            inputDigit(key);
-            flash(`[data-calc-digit="${key}"]`);
-        } else if (key === '.' || key === ',' || code === 'NumpadDecimal') {
-            inputDot();
-            flash('[data-calc-action="dot"]');
-        } else if (key === '+' || key === '-' || key === '*' || key === '/') {
-            inputOperator(key);
-            flash(`[data-calc-op="${key}"]`);
-        } else if (key === 'Enter' || key === '=') {
-            if (key === 'Enter' && onOtherControl) return;
-            equals();
-            flash('[data-calc-action="equals"]');
-        } else if (key === 'Backspace') {
-            backspace();
-            flash('[data-calc-action="backspace"]');
-        } else if (key === 'Escape' || key === 'Delete') {
-            resetAll();
-            flash('[data-calc-action="clear"]');
-        } else if (key === '%') {
-            percent();
-            flash('[data-calc-action="percent"]');
-        } else {
-            return;
-        }
-
-        // Stops "/" quick-find in browsers, page scrolling, and a focused
-        // button also "clicking" itself when Enter is pressed.
-        event.preventDefault();
-    });
-
-    render();
-});
-
-
-// =========================================
-// THEME PICKER
-// =========================================
-document.addEventListener('DOMContentLoaded', () => {
-
-    const THEME_KEY = 'productionTrackerTheme';
-    const THEMES = ['midnight', 'forest', 'daylight', 'graphite'];
-    const swatches = document.querySelectorAll('.theme-swatch');
-
-    function applyTheme(theme) {
-        if (!THEMES.includes(theme)) theme = 'midnight';
-
-        document.documentElement.dataset.theme = theme;
+        applyTheme(Store.getRaw(STORAGE_KEYS.theme));
 
         swatches.forEach(btn => {
-            const isActive = btn.dataset.theme === theme;
-            btn.classList.toggle('active', isActive);
-            btn.setAttribute('aria-pressed', String(isActive));
+            btn.addEventListener('click', () => {
+                applyTheme(btn.dataset.theme);
+                Store.setRaw(STORAGE_KEYS.theme, btn.dataset.theme);
+            });
         });
     }
 
-    let saved = null;
-    try { saved = localStorage.getItem(THEME_KEY); } catch (e) {}
+    /* =================================================================
+     * 17. STARTUP + DEBUG API
+     * ================================================================= */
 
-    applyTheme(saved);
+    // Returns a list of problems in the current data (empty = healthy).
+    function validateState() {
+        const problems = [];
+        const taskNames = new Set();
 
-    swatches.forEach(btn => {
-        btn.addEventListener('click', () => {
-            applyTheme(btn.dataset.theme);
-            try {
-                localStorage.setItem(THEME_KEY, btn.dataset.theme);
-            } catch (e) {}
+        state.rows.forEach((row, i) => {
+            if (!row || typeof row !== 'object') {
+                problems.push(`row ${i}: not an object`);
+                return;
+            }
+
+            if (!row.type) taskNames.add(row.task);
+
+            if (row.type === 'special') {
+                if (!Array.isArray(row.fields)) problems.push(`row ${i} (${row.task}): special row has no fields`);
+                if (Array.isArray(row.fields) && Array.isArray(row.values) &&
+                    row.values.length > row.fields.length) {
+                    problems.push(`row ${i} (${row.task}): more values than fields`);
+                }
+            }
+
+            ['items', 'time'].forEach(field => {
+                const v = row[field];
+                if (v !== undefined && v !== '' && !Number.isFinite(Number(v))) {
+                    problems.push(`row ${i} (${row.task}): "${field}" is not a number: ${JSON.stringify(v)}`);
+                }
+            });
         });
-    });
-});
+
+        state.rows.forEach((row, i) => {
+            if (row && row.type === 'subtotal' && !taskNames.has(getSubtotalParent(row))) {
+                problems.push(`row ${i}: subtotal "${row.task}" has no matching task rows`);
+            }
+        });
+
+        ['fbp', 'datadog'].forEach(type => {
+            const count = state.rows.filter(r => r && r.type === type).length;
+            if (count !== 1) problems.push(`expected exactly 1 "${type}" row, found ${count}`);
+        });
+
+        return problems;
+    }
+
+    window.ProductionTracker = {
+        state,
+        config: CONFIG,
+        debug: on => Log.setEnabled(on === undefined ? !Log.isEnabled() : on),
+        validate() {
+            const problems = validateState();
+            if (problems.length) console.warn('Problems found:', problems);
+            else console.info('State looks healthy.');
+            return problems;
+        },
+        dump() {
+            console.table(state.rows.map((r, index) => ({
+                index,
+                type: r.type || 'task',
+                task: r.task,
+                items: r.items,
+                time: r.time,
+                visible: r.visible
+            })));
+        },
+        resetStorage() {
+            if (!confirm('Delete ALL saved Production Tracker data and reload?')) return;
+            Object.values(STORAGE_KEYS).forEach(key => {
+                try { localStorage.removeItem(key); } catch (e) { /* ignore */ }
+            });
+            location.reload();
+        }
+    };
+
+    function init() {
+        safeInit('theme', initTheme);
+        safeInit('production date', initProductionDate);
+        safeInit('shift name', initShiftName);
+        safeInit('shift selector', initShiftSelector);
+
+        // State must exist before anything renders
+        safeInit('state', () => {
+            loadCustomTasks();
+            loadDeletedBuiltIns();
+            state.rows = buildDefaultRows();
+            loadSavedProduction();
+        });
+
+        safeInit('task buttons', initTaskButtons);
+        safeInit('table events', initTableEvents);
+        safeInit('overtime', initOvertime);
+        safeInit('comma tool', initCommaTool);
+        safeInit('clear all', initClearAll);
+        safeInit('screenshot', initScreenshot);
+        safeInit('calculator', initCalculator);
+
+        safeInit('first render', renderTable);
+
+        if (Log.isEnabled()) {
+            const problems = validateState();
+            if (problems.length) Log.warn('Data problems on startup:', problems);
+        }
+
+        Log.debug('ready. Try ProductionTracker.dump() / .validate()');
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+})();

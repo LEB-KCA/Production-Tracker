@@ -1,3 +1,27 @@
+/* =====================================================================
+   PRODUCTION TRACKER - STYLES
+   ---------------------------------------------------------------------
+    1. Themes (CSS variables)
+    2. Base & layout
+    3. Top bar: task buttons, overtime, theme picker
+    4. Shift panel (name, date, shift)
+    5. Production table
+    6. Special rows (FBP, Datadog, special tasks)
+    7. Total production bar
+    8. Bottom tools (comma tool, controls, calculator)
+    9. Buttons
+   10. Dialogs
+   11. Screenshot (area + landscape layout)
+   ===================================================================== */
+
+
+/* =====================================================================
+   1. THEMES
+   Every color in the app comes from these variables.
+   To add a theme: copy a block, change its name, and add the name to
+   THEMES in script.js plus a swatch button in index.html.
+   ===================================================================== */
+
 :root {
     /* ===== Theme: Midnight (default) ===== */
     --bg-dark: #12161f;
@@ -13,10 +37,8 @@
     --input-text: #ffffff;
     --accent: #38bdf8;
     --accent-soft: rgba(56, 189, 248, .08);
-    --accent-green: #10b981;
     --accent-blue: #0284c7;
     --accent-blue-hover: #0369a1;
-    --accent-red: #ef4444;
     --on-accent: #0f172a;
     --table-header: #1e293b;
     --row-alt: #161e2e;
@@ -33,6 +55,18 @@
     --subtotal-bg: #0b3a55;
     --subtotal-border: #38bdf8;
     --subtotal-text: #e0f2fe;
+
+    /* Shared by every theme */
+    --accent-green: #10b981;
+    --accent-green-hover: #059669;
+    --accent-green-soft: rgba(16, 185, 129, 0.08);
+    --accent-red: #ef4444;
+    --accent-red-hover: #dc2626;
+    --accent-red-soft: rgba(239, 68, 68, 0.10);
+    --status-working: #f59e0b;
+    --error-text: #f87171;
+    --total-value: #fca5a5;
+
     color-scheme: dark;
 }
 
@@ -144,6 +178,11 @@
     color-scheme: dark;
 }
 
+
+/* =====================================================================
+   2. BASE & LAYOUT
+   ===================================================================== */
+
 * {
     box-sizing: border-box;
     margin: 0;
@@ -165,7 +204,38 @@ body {
     gap: 15px;
 }
 
-/* Top Bar */
+label {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+textarea {
+    background: var(--surface-deep);
+    border: 1px solid var(--border-strong);
+    color: var(--input-text);
+    padding: 6px;
+    border-radius: 4px;
+    resize: vertical;
+    font-family: monospace;
+}
+
+textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+/* Hide number input spinner arrows */
+input.no-spinner::-webkit-outer-spin-button,
+input.no-spinner::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+
+/* =====================================================================
+   3. TOP BAR
+   ===================================================================== */
+
 .top-bar {
     display: flex;
     justify-content: space-between;
@@ -177,6 +247,8 @@ body {
     flex-wrap: wrap;
     gap: 10px;
 }
+
+/* ---- task toggle buttons ---- */
 
 .task-toggles {
     display: flex;
@@ -193,7 +265,7 @@ body {
     font-size: 13px;
     border-radius: 4px;
     cursor: pointer;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
     transition: all 0.2s;
 }
 
@@ -207,7 +279,66 @@ body {
     opacity: 0.9;
 }
 
-/* OT Selector */
+/* A toggle button + its delete (x) button.
+   Used by built-in, custom and special tasks (JS adds .task-control). */
+.task-control {
+    display: inline-flex;
+    align-items: stretch;
+    height: 34px;
+    margin: 0;
+    padding: 0;
+}
+
+.task-control .toggle-btn {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+.task-delete-btn {
+    width: 24px;
+    padding: 0;
+    background: transparent;
+    color: var(--text-faint);
+    border: 1px solid var(--border-strong);
+    border-left: none;
+    border-top-right-radius: 4px;
+    border-bottom-right-radius: 4px;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    transition:
+        color 0.2s ease,
+        background 0.2s ease,
+        border-color 0.2s ease;
+}
+
+.task-delete-btn:hover {
+    color: var(--accent-red);
+    background: var(--accent-red-soft);
+    border-color: var(--accent-red);
+}
+
+/* "+ NEW TASK" / "+ SPECIAL TASK" */
+.new-task-btn {
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px dashed var(--border-strong);
+    border-radius: 4px;
+    padding: 8px 12px;
+    font-size: 12px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: color .2s, border-color .2s, background .2s;
+}
+
+.new-task-btn:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: var(--accent-soft);
+}
+
+/* ---- overtime selector ---- */
+
 .ot-selector {
     display: flex;
     flex-direction: column;
@@ -260,7 +391,7 @@ body {
     background: var(--accent-blue);
     color: white;
     border: none;
-    border-right: 1px solid rgba(255,255,255,0.2);
+    border-right: 1px solid rgba(255, 255, 255, 0.2);
     padding: 6px 12px;
     font-size: 12px;
     font-weight: bold;
@@ -276,7 +407,51 @@ body {
     text-decoration: underline;
 }
 
-/* Shift Info Panel */
+/* ---- theme picker ---- */
+
+.theme-picker {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+}
+
+.theme-label {
+    font-size: 10px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    color: var(--text-muted);
+}
+
+.theme-swatches {
+    display: flex;
+    gap: 8px;
+}
+
+.theme-swatch {
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border-radius: 50%;
+    border: 2px solid var(--border-strong);
+    background: linear-gradient(135deg, var(--sw-bg) 50%, var(--sw-accent) 50%);
+    cursor: pointer;
+    transition: transform .12s, box-shadow .12s;
+}
+
+.theme-swatch:hover {
+    transform: scale(1.12);
+}
+
+.theme-swatch.active {
+    box-shadow: 0 0 0 2px var(--panel-dark), 0 0 0 4px var(--accent);
+}
+
+
+/* =====================================================================
+   4. SHIFT PANEL
+   ===================================================================== */
+
 .shift-info-panel {
     display: grid;
     grid-template-columns: 1fr 2fr 1fr 1fr;
@@ -289,7 +464,114 @@ body {
     font-size: 14px;
 }
 
-/* Table */
+/* ---- shift selector ---- */
+
+.shift-title select {
+    background: transparent;
+    border: none;
+    color: inherit;
+    font-size: inherit;
+    font-weight: inherit;
+    text-align: center;
+    cursor: pointer;
+    outline: none;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+}
+
+.shift-title select:hover {
+    color: var(--accent);
+}
+
+.shift-title select option {
+    background: var(--table-header);
+    color: var(--text-main);
+}
+
+/* ---- editable name ---- */
+
+.shift-name,
+.shift-date {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#shiftName {
+    width: 100%;
+    background: transparent;
+    color: inherit;
+    border: none;
+    border-bottom: 1px dashed transparent;
+    outline: none;
+    padding: 0;
+    margin: 0;
+    font-family: inherit;
+    font-size: inherit;
+    font-weight: inherit;
+    text-align: center;
+    cursor: text;
+    transition: color .15s, border-color .15s;
+}
+
+#shiftName:hover {
+    color: var(--accent);
+}
+
+#shiftName:focus {
+    color: var(--text-main);
+    border-bottom-color: var(--accent);
+}
+
+/* ---- production date: looks like normal header text ---- */
+
+#productionDate {
+    position: relative;
+    width: auto;
+    height: auto;
+    appearance: none;
+    -webkit-appearance: none;
+    background: transparent;
+    color: var(--text-bright);
+    border: none;
+    outline: none;
+    padding: 0;
+    margin: 0;
+    font-family: inherit;
+    font-size: inherit;
+    font-weight: inherit;
+    text-align: center;
+    cursor: pointer;
+}
+
+/* Keep the calendar picker working, but hide its icon */
+#productionDate::-webkit-calendar-picker-indicator {
+    opacity: 0;
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 100%;
+    height: 100%;
+    cursor: pointer;
+}
+
+#productionDate::-webkit-datetime-edit,
+#productionDate::-webkit-datetime-edit-fields-wrapper {
+    padding: 0;
+}
+
+#productionDate:hover,
+#productionDate:focus {
+    color: var(--accent);
+    outline: none;
+}
+
+
+/* =====================================================================
+   5. PRODUCTION TABLE
+   ===================================================================== */
+
 .table-container {
     border: 1px solid var(--border-color);
     border-radius: 4px;
@@ -333,6 +615,167 @@ body {
     border-color: var(--accent);
 }
 
+/* ---- task label (left column) ---- */
+
+.production-row {
+    position: relative;
+}
+
+.task-group-cell {
+    background: var(--surface-deep);
+    text-align: center;
+    vertical-align: middle;
+    padding: 10px;
+    font-weight: bold;
+    border-right: 1px solid var(--border-color);
+}
+
+.task-label-text {
+    font-size: 15px;
+    color: var(--accent);
+    margin-bottom: 6px;
+}
+
+/* ---- status button + hidden delete (x) ---- */
+
+.status-cell {
+    position: relative;
+    padding-right: 30px !important;
+}
+
+.status-toggle-btn {
+    border: none;
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-weight: bold;
+    font-size: 11px;
+    cursor: pointer;
+    width: 100%;
+    text-align: center;
+    transition: filter 0.2s;
+}
+
+.status-toggle-btn.status-working {
+    background-color: var(--status-working);
+    color: #0f172a;
+}
+
+.status-toggle-btn.status-done {
+    background-color: var(--accent-green);
+    color: #0f172a;
+}
+
+.status-toggle-btn:hover {
+    filter: brightness(1.15);
+}
+
+/* Delete X - hidden until the row is hovered */
+.row-hide-btn {
+    position: absolute;
+    right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    background: transparent;
+    color: var(--accent-red);
+    border: 1px solid transparent;
+    border-radius: 3px;
+    font-size: 13px;
+    font-weight: bold;
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transition:
+        opacity 0.15s ease,
+        background 0.15s ease;
+}
+
+.production-row:hover .row-hide-btn {
+    opacity: 0.65;
+    pointer-events: auto;
+}
+
+.row-hide-btn:hover {
+    opacity: 1 !important;
+    background: var(--accent-red);
+    color: white;
+    border-color: var(--accent-red);
+}
+
+/* ---- subtotal row ---- */
+
+.subtotal-row td {
+    background: var(--table-header);
+    font-weight: bold;
+}
+
+.subtotal-label-cell {
+    text-align: center !important;
+    padding-left: 8px !important;
+    white-space: nowrap;
+}
+
+.subtotal-row .subtotal-label-cell span {
+    font-size: 15px;
+}
+
+/* Small subtle "+" (add row) button */
+.add-row-btn-subtotal {
+    width: 22px;
+    height: 22px;
+    margin-right: 8px;
+    padding: 0;
+    background: transparent;
+    color: var(--text-faint);
+    border: 1px solid var(--border-strong);
+    border-radius: 3px;
+    font-size: 13px;
+    font-weight: bold;
+    line-height: 18px;
+    cursor: pointer;
+    transition:
+        color 0.15s ease,
+        border-color 0.15s ease,
+        background 0.15s ease;
+}
+
+.add-row-btn-subtotal:hover {
+    color: var(--accent-green);
+    border-color: var(--accent-green);
+    background: var(--accent-green-soft);
+}
+
+/* Highlighted subtotals (items + time per task) */
+.subtotal-row input.calc-items,
+.subtotal-row input.calc-time {
+    background: var(--subtotal-bg);
+    color: var(--subtotal-text);
+    border: 2px solid var(--subtotal-border);
+    font-size: 16px;
+    font-weight: 800;
+    cursor: default;
+}
+
+
+/* =====================================================================
+   6. SPECIAL ROWS  (FBP, Datadog, special tasks)
+   ===================================================================== */
+
+/* Column headers above FBP / Datadog / special rows */
+.special-header-row td {
+    background: var(--table-header);
+    color: var(--text-muted);
+    padding: 10px;
+    font-weight: 600;
+    text-align: center;
+    border-bottom: 1px solid var(--border-color);
+    border-right: 1px solid var(--border-color);
+}
+
 .section-header-row td {
     background: var(--surface-deep);
     font-weight: bold;
@@ -341,21 +784,42 @@ body {
     color: var(--accent);
 }
 
-.subtotal-row td {
-    background: var(--table-header);
+/* The rows themselves (compact) */
+.fbp-row td,
+.datadog-row td,
+.special-row td {
+    padding: 4px 6px;
+    background: var(--surface-deep);
     font-weight: bold;
+    text-align: center;
 }
 
-.status-badge {
-    background: var(--accent-green);
-    color: black;
-    padding: 4px 8px;
-    border-radius: 3px;
-    font-weight: bold;
-    font-size: 12px;
+.fbp-row input,
+.datadog-row input,
+.special-row input {
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0;
 }
 
-/* Total Production Bar */
+.fbp-row .fbp-task-cell,
+.special-row .special-task-cell {
+    color: var(--accent);
+}
+
+.fbp-row .fbp-task-cell strong {
+    white-space: nowrap;
+}
+
+.datadog-row .datadog-task-cell {
+    color: var(--text-main);
+}
+
+
+/* =====================================================================
+   7. TOTAL PRODUCTION BAR
+   ===================================================================== */
+
 .total-production-bar {
     display: grid;
     grid-template-columns: 2fr 1fr 1fr;
@@ -393,10 +857,14 @@ body {
 }
 
 .red-text {
-    color: #fca5a5;
+    color: var(--total-value);
 }
 
-/* Bottom Tools Section */
+
+/* =====================================================================
+   8. BOTTOM TOOLS  (not part of the screenshot)
+   ===================================================================== */
+
 .bottom-tools-grid {
     display: grid;
     grid-template-columns: 2fr 1fr;
@@ -426,36 +894,31 @@ body {
     gap: 10px;
 }
 
+.center-flex {
+    justify-content: center;
+    align-items: center;
+    height: 100%;
+    min-height: 100px;
+}
+
+.tool-actions {
+    display: flex;
+    gap: 8px;
+}
+
+/* ---- comma separator ---- */
+
 .input-output-split {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 10px;
 }
 
-.stack-inputs, .stack-outputs {
+.stack-inputs,
+.stack-outputs {
     display: flex;
     flex-direction: column;
     gap: 4px;
-}
-
-label {
-    font-size: 11px;
-    color: var(--text-muted);
-}
-
-textarea {
-    background: var(--surface-deep);
-    border: 1px solid var(--border-strong);
-    color: var(--input-text);
-    padding: 6px;
-    border-radius: 4px;
-    resize: vertical;
-    font-family: monospace;
-}
-
-textarea:focus {
-    outline: none;
-    border-color: var(--accent);
 }
 
 .output-result-box {
@@ -471,457 +934,18 @@ textarea:focus {
     overflow-y: auto;
 }
 
-.tool-actions {
-    display: flex;
-    gap: 8px;
-}
-
-.action-btn {
-    background: var(--btn-dark);
-    color: white;
-    border: none;
-    padding: 8px 12px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-weight: bold;
-    font-size: 12px;
-}
-
-.action-btn:hover {
-    background: var(--btn-dark-hover);
-}
-
-.clear-btn {
-    background: var(--btn-light);
-    color: var(--btn-light-text);
-    border: none;
-    padding: 8px 16px;
-    font-weight: bold;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 12px;
-    transition: background 0.2s;
-}
-
-.clear-btn:hover {
-    background: var(--btn-light-hover);
-}
-
-.center-flex {
-    justify-content: center;
-    align-items: center;
-    height: 100%;
-    min-height: 100px;
-}
-
-.large-clear {
-    width: 100%;
-    padding: 14px;
-    font-size: 15px;
-    background: #ef4444;
-    color: white;
-}
-
-.large-clear:hover {
-    background: #dc2626;
-}
-
-@media (max-width: 768px) {
-    .bottom-tools-grid {
-        grid-template-columns: 1fr;
-    }
-    .input-output-split {
-        grid-template-columns: 1fr;
-    }
-}
-
-.task-group-cell {
-    background: var(--surface-deep);
-    text-align: center;
-    vertical-align: middle;
-    padding: 10px;
-    font-weight: bold;
-    border-right: 1px solid var(--border-color);
-}
-
-.task-label-text {
-    font-size: 14px;
-    color: var(--accent);
-    margin-bottom: 6px;
-}
-
-.action-buttons-group {
-    display: flex;
-    justify-content: center;
-    gap: 4px;
-}
-
-.add-row-btn-inline {
-    background: transparent;
-    color: #10b981;
-    border: 1px solid #10b981;
-    border-radius: 4px;
-    width: 26px;
-    height: 26px;
-    font-weight: bold;
-    font-size: 14px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s;
-}
-
-.add-row-btn-inline:hover {
-    background: #10b981;
-    color: white;
-}
-
-.row-hide-btn {
-    background: transparent;
-    color: #ef4444;
-    border: 1px solid #ef4444;
-    border-radius: 4px;
-    width: 26px;
-    height: 26px;
-    font-weight: bold;
-    font-size: 14px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s;
-}
-
-.row-hide-btn:hover {
-    background: #ef4444;
-    color: white;
-}
-
-.task-group-cell {
-    background: var(--surface-deep);
-    text-align: center;
-    vertical-align: middle;
-    padding: 10px;
-    font-weight: bold;
-    border-right: 1px solid var(--border-color);
-}
-
-.task-label-text {
-    font-size: 15px;
-    color: var(--accent);
-}
-
-.status-toggle-btn {
-    border: none;
-    padding: 6px 10px;
-    border-radius: 4px;
-    font-weight: bold;
-    font-size: 11px;
-    cursor: pointer;
-    width: 100%;
-    text-align: center;
-    transition: filter 0.2s;
-}
-
-.status-toggle-btn.status-working {
-    background-color: #f59e0b; /* Amber/Orange */
-    color: #0f172a;
-}
-
-.status-toggle-btn.status-done {
-    background-color: #10b981; /* Green */
-    color: #0f172a;
-}
-
-.status-toggle-btn:hover {
-    filter: brightness(1.15);
-}
-
-/* Hide number input spinner arrows */
-input.no-spinner::-webkit-outer-spin-button,
-input.no-spinner::-webkit-inner-spin-button {
-    -webkit-appearance: none;
-    margin: 0;
-}
-
-
-/* FBP Checks - compact layout */
-.fbp-row td {
-    padding: 4px 6px;
-    background: var(--surface-deep);
-    font-weight: bold;
-}
-
-.fbp-row .fbp-task-cell {
-    text-align: center;
-    color: var(--accent);
-}
-
-.fbp-row .fbp-ulp-cell {
-    text-align: center;
-}
-
-.fbp-row .fbp-items-cell,
-.fbp-row .fbp-time-cell {
-    text-align: center;
-}
-
-.fbp-row input {
-    width: 100%;
-    box-sizing: border-box;
-    margin: 0;
-}
-
-.fbp-row .fbp-task-cell strong {
-    white-space: nowrap;
-}
-
-
-/* Datadog - compact layout */
-.datadog-row td {
-    padding: 4px 6px;
-    background: var(--surface-deep);
-    font-weight: bold;
-}
-
-.datadog-row .datadog-task-cell {
-    text-align: center;
-    color: var(--text-main);
-}
-
-.datadog-row .datadog-items-cell,
-.datadog-row .datadog-time-cell {
-    text-align: center;
-}
-
-.datadog-row input {
-    width: 100%;
-    box-sizing: border-box;
-    margin: 0;
-}
-
-/* =========================================
-   CLEAN TASK CONTROLS
-   ========================================= */
-
-/* Keep normal production rows clean */
-.production-row {
-    position: relative;
-}
-
-/* Status cell becomes the home for the hidden X */
-.status-cell {
-    position: relative;
-    padding-right: 30px !important;
-}
-
-/* Delete X - hidden normally */
-.row-hide-btn {
-    position: absolute;
-    right: 4px;
-    top: 50%;
-    transform: translateY(-50%);
-
-    width: 20px;
-    height: 20px;
-
-    background: transparent;
-    color: #ef4444;
-
-    border: 1px solid transparent;
-    border-radius: 3px;
-
-    font-size: 13px;
-    font-weight: bold;
-
-    cursor: pointer;
-
-    opacity: 0;
-    pointer-events: none;
-
-    transition:
-        opacity 0.15s ease,
-        background 0.15s ease;
-}
-
-/* Show X only when hovering over the row */
-.production-row:hover .row-hide-btn {
-    opacity: 0.65;
-    pointer-events: auto;
-}
-
-/* Stronger when hovering directly over X */
-.row-hide-btn:hover {
-    opacity: 1 !important;
-    background: #ef4444;
-    color: white;
-    border-color: #ef4444;
-}
-
-
-/* =========================================
-   SUBTOTAL / ADD ROW BUTTON
-   ========================================= */
-
-.subtotal-label-cell {
-    text-align: center !important;
-
-    padding-left: 8px !important;
-
-    white-space: nowrap;
-}
-
-/* Small subtle + button */
-.add-row-btn-subtotal {
-    width: 22px;
-    height: 22px;
-
-    margin-right: 8px;
-
-    padding: 0;
-
-    background: transparent;
-
-    color: var(--text-faint);
-
-    border: 1px solid var(--border-strong);
-
-    border-radius: 3px;
-
-    font-size: 13px;
-    font-weight: bold;
-
-    line-height: 18px;
-
-    cursor: pointer;
-
-    transition:
-        color 0.15s ease,
-        border-color 0.15s ease,
-        background 0.15s ease;
-}
-
-/* Subtle hover */
-.add-row-btn-subtotal:hover {
-    color: #10b981;
-    border-color: #10b981;
-    background: rgba(16, 185, 129, 0.08);
-}
-
-
-/* =========================================
-   FBP CHECKS
-   ========================================= */
-
-.fbp-row td {
-    padding: 4px 6px;
-    background: var(--surface-deep);
-    font-weight: bold;
-}
-
-.fbp-row .fbp-task-cell {
-    text-align: center;
-    color: var(--accent);
-}
-
-.fbp-row .fbp-ulp-cell {
-    text-align: center;
-}
-
-.fbp-row .fbp-items-cell,
-.fbp-row .fbp-time-cell {
-    text-align: center;
-}
-
-.fbp-row input {
-    width: 100%;
-    box-sizing: border-box;
-    margin: 0;
-}
-
-.fbp-row .fbp-task-cell strong {
-    white-space: nowrap;
-}
-
-
-/* =========================================
-   DATADOG
-   ========================================= */
-
-.datadog-row td {
-    padding: 4px 6px;
-    background: var(--surface-deep);
-    font-weight: bold;
-}
-
-.datadog-row .datadog-task-cell {
-    text-align: center;
-    color: var(--text-main);
-}
-
-.datadog-row .datadog-items-cell,
-.datadog-row .datadog-time-cell {
-    text-align: center;
-}
-
-.datadog-row input {
-    width: 100%;
-    box-sizing: border-box;
-    margin: 0;
-}
-
-/* =========================================
-   SHIFT SELECTOR
-   ========================================= */
-
-.shift-title select {
-    background: transparent;
-    border: none;
-    color: inherit;
-
-    font-size: inherit;
-    font-weight: inherit;
-    text-align: center;
-
-    cursor: pointer;
-
-    outline: none;
-
-    appearance: none;
-    -webkit-appearance: none;
-    -moz-appearance: none;
-}
-
-.shift-title select:hover {
-    color: var(--accent);
-}
-
-.shift-title select option {
-    background: var(--table-header);
-    color: var(--text-main);
-}
-
-/* =========================================
-   SCREENSHOT BUTTON
-   ========================================= */
+/* ---- production controls ---- */
 
 .screenshot-btn {
     width: 100%;
-
     padding: 14px;
-
     background: var(--accent-blue);
     color: white;
-
     border: none;
     border-radius: 4px;
-
     font-size: 15px;
     font-weight: bold;
-
     cursor: pointer;
-
     transition:
         background 0.2s,
         transform 0.1s;
@@ -940,220 +964,51 @@ input.no-spinner::-webkit-inner-spin-button {
     cursor: wait;
 }
 
-/* =========================================
-   SCREENSHOT AREA
-   ========================================= */
-
-#screenshotArea,
-#screenshotClone {
-    padding: 10px;
-    box-sizing: border-box;
-
-    display: flex;
-    flex-direction: column;
-
-    gap: 10px;
-
-    background: var(--bg-dark);
-
-    border-radius: 6px;
-}
-
-
-/* =========================================
-   SCREENSHOT SECTION SPACING
-   ========================================= */
-
-/* Shift section */
-#screenshotArea .shift-info-panel,
-#screenshotClone .shift-info-panel {
-    margin: 0;
-}
-
-
-/* Production table */
-#screenshotArea .table-container,
-#screenshotClone .table-container {
-    margin: 0;
-}
-
-
-/* Total production */
-#screenshotArea .total-production-bar,
-#screenshotClone .total-production-bar {
-    margin: 0;
-}
-/* Custom task creator */
-.new-task-btn {
-    background: transparent;
-    color: var(--text-muted);
-    border: 1px dashed var(--border-strong);
-    border-radius: 4px;
-    padding: 8px 12px;
-    font-size: 12px;
-    font-weight: bold;
-    cursor: pointer;
-    transition: color .2s, border-color .2s, background .2s;
-}
-
-.new-task-btn:hover {
-    color: var(--accent);
-    border-color: var(--accent);
-    background: var(--accent-soft);
-}
-
-/* =========================================
-   PRODUCTION DATE - CLEAN TEXT STYLE
-   ========================================= */
-
-.shift-date {
+.layout-select-row {
     display: flex;
     align-items: center;
-    justify-content: center;
+    gap: 8px;
 }
 
-/* Date looks like normal header text */
-#productionDate {
-    position: relative;
-
-    width: auto;
-    height: auto;
-
-    appearance: none;
-    -webkit-appearance: none;
-
-    background: transparent;
-    color: var(--text-bright);
-
-    border: none;
-    outline: none;
-
-    padding: 0;
-    margin: 0;
-
-    font-family: inherit;
-    font-size: inherit;
-    font-weight: inherit;
-    text-align: center;
-
-    cursor: pointer;
+.layout-select-row label {
+    white-space: nowrap;
+    font-size: 11px;
 }
 
-/* Keep the calendar picker functional,
-   but make its icon invisible */
-#productionDate::-webkit-calendar-picker-indicator {
-    opacity: 0;
-    position: absolute;
-    top: 0;
-    right: 0;
-    width: 100%;
-    height: 100%;
-    cursor: pointer;
-}
-
-/* Remove extra browser spacing */
-#productionDate::-webkit-datetime-edit {
-    padding: 0;
-}
-
-#productionDate::-webkit-datetime-edit-fields-wrapper {
-    padding: 0;
-}
-
-/* Subtle hover effect */
-#productionDate:hover {
-    color: var(--accent);
-}
-
-/* Focus */
-#productionDate:focus {
-    color: var(--accent);
-    outline: none;
-}
-
-/* =========================================
-   CUSTOM TASK CONTROL
-   ========================================= */
-
-.custom-task-control {
-    display: inline-flex;
-    align-items: stretch;
-    margin: 0;
-    padding: 0;
-}
-
-/* Custom task button */
-.custom-task-control .custom-task-btn {
-    border-top-right-radius: 0;
-    border-bottom-right-radius: 0;
-}
-
-/* Delete custom task */
-.custom-task-delete-btn {
-    width: 24px;
-
-    padding: 0;
-
-    background: transparent;
-    color: var(--text-faint);
-
+.layout-select-row select {
+    flex: 1;
+    min-width: 0;
+    background: var(--surface-deep);
+    color: var(--input-text);
     border: 1px solid var(--border-strong);
-    border-left: none;
-
-    border-top-right-radius: 4px;
-    border-bottom-right-radius: 4px;
-
-    font-size: 16px;
-    font-weight: bold;
-
-    cursor: pointer;
-
-    transition:
-        color 0.2s ease,
-        background 0.2s ease,
-        border-color 0.2s ease;
+    border-radius: 4px;
+    padding: 6px;
+    font-size: 12px;
 }
 
-.custom-task-delete-btn:hover {
-    color: #ef4444;
-    background: rgba(239, 68, 68, 0.10);
-    border-color: #ef4444;
+.large-clear {
+    width: 100%;
+    padding: 14px;
+    font-size: 15px;
+    background: var(--accent-red);
+    color: white;
 }
 
-/* Make sure custom controls line up with the task buttons */
-.custom-task-control {
-    height: 34px;
+.large-clear:hover {
+    background: var(--accent-red-hover);
 }
 
+.restore-tasks-btn {
+    width: 100%;
+    padding: 10px;
+}
 
-/* ===== New Task dialog ===== */
-.modal-overlay {
-    position: fixed; inset: 0; z-index: 9999;
-    background: rgba(0, 0, 0, 0.6);
-    display: flex; align-items: center; justify-content: center;
+.restore-tasks-btn[hidden] {
+    display: none;
 }
-.modal-box {
-    width: 360px; max-width: 90vw;
-    background: var(--table-header); color: var(--text-main);
-    border: 1px solid var(--border-color); border-radius: 10px;
-    padding: 20px; display: flex; flex-direction: column; gap: 8px;
-}
-.modal-box h3 { margin: 0 0 6px; }
-.modal-box label { font-size: 12px; color: var(--text-muted); }
-.modal-box input[type="text"],
-.modal-box input[type="number"] {
-    width: 100%; box-sizing: border-box; padding: 8px 10px;
-    background: var(--surface-deep); color: var(--input-text);
-    border: 1px solid var(--border-color); border-radius: 6px;
-}
-.modal-radio { display: flex; flex-direction: column; gap: 4px; }
-.modal-radio label { color: var(--text-soft); font-size: 13px; }
-.modal-error { color: #f87171; font-size: 12px; min-height: 16px; }
-.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 
-/* =========================================
-   CALCULATOR
-   ========================================= */
+/* ---- calculator ---- */
+
 .calculator-card {
     grid-column: 1 / -1;
 }
@@ -1234,7 +1089,7 @@ input.no-spinner::-webkit-inner-spin-button {
 }
 
 .calc-btn.calc-equals:hover {
-    background: #059669;
+    background: var(--accent-green-hover);
 }
 
 /* Visual feedback when a key is pressed on the keyboard */
@@ -1248,285 +1103,127 @@ input.no-spinner::-webkit-inner-spin-button {
     font-size: 10px;
 }
 
+@media (max-width: 768px) {
+    .bottom-tools-grid,
+    .input-output-split {
+        grid-template-columns: 1fr;
+    }
+}
 
-/* =========================================
-   EDITABLE NAME
-   ========================================= */
-.shift-name {
+
+/* =====================================================================
+   9. BUTTONS
+   ===================================================================== */
+
+.action-btn {
+    background: var(--btn-dark);
+    color: white;
+    border: none;
+    padding: 8px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: bold;
+    font-size: 12px;
+}
+
+.action-btn:hover {
+    background: var(--btn-dark-hover);
+}
+
+.clear-btn {
+    background: var(--btn-light);
+    color: var(--btn-light-text);
+    border: none;
+    padding: 8px 16px;
+    font-weight: bold;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: background 0.2s;
+}
+
+.clear-btn:hover {
+    background: var(--btn-light-hover);
+}
+
+
+/* =====================================================================
+   10. DIALOGS  (New Task / New Special Task)
+   ===================================================================== */
+
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: rgba(0, 0, 0, 0.6);
     display: flex;
     align-items: center;
     justify-content: center;
 }
 
-#shiftName {
-    width: 100%;
-    background: transparent;
-    color: inherit;
-    border: none;
-    border-bottom: 1px dashed transparent;
-    outline: none;
-    padding: 0;
-    margin: 0;
-    font-family: inherit;
-    font-size: inherit;
-    font-weight: inherit;
-    text-align: center;
-    cursor: text;
-    transition: color .15s, border-color .15s;
-}
-
-#shiftName:hover {
-    color: var(--accent);
-}
-
-#shiftName:focus {
+.modal-box {
+    width: 360px;
+    max-width: 90vw;
+    background: var(--table-header);
     color: var(--text-main);
-    border-bottom-color: var(--accent);
-}
-
-
-/* =========================================
-   THEME PICKER
-   ========================================= */
-.theme-picker {
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 20px;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 6px;
-}
-
-.theme-label {
-    font-size: 10px;
-    font-weight: bold;
-    letter-spacing: 1px;
-    color: var(--text-muted);
-}
-
-.theme-swatches {
-    display: flex;
     gap: 8px;
 }
 
-.theme-swatch {
-    width: 26px;
-    height: 26px;
-    padding: 0;
-    border-radius: 50%;
-    border: 2px solid var(--border-strong);
-    background: linear-gradient(135deg, var(--sw-bg) 50%, var(--sw-accent) 50%);
-    cursor: pointer;
-    transition: transform .12s, box-shadow .12s;
+.modal-box h3 {
+    margin: 0 0 6px;
 }
 
-.theme-swatch:hover {
-    transform: scale(1.12);
-}
-
-.theme-swatch.active {
-    box-shadow: 0 0 0 2px var(--panel-dark), 0 0 0 4px var(--accent);
-}
-
-
-/* =========================================
-   DELETE BUILT-IN TASKS
-   ========================================= */
-.builtin-task-control {
-    display: inline-flex;
-    align-items: stretch;
-    height: 34px;
-    margin: 0;
-    padding: 0;
-}
-
-.builtin-task-control .toggle-btn {
-    border-top-right-radius: 0;
-    border-bottom-right-radius: 0;
-}
-
-.builtin-task-delete-btn {
-    width: 24px;
-    padding: 0;
-    background: transparent;
-    color: var(--text-faint);
-    border: 1px solid var(--border-strong);
-    border-left: none;
-    border-top-right-radius: 4px;
-    border-bottom-right-radius: 4px;
-    font-size: 16px;
-    font-weight: bold;
-    cursor: pointer;
-    transition:
-        color 0.2s ease,
-        background 0.2s ease,
-        border-color 0.2s ease;
-}
-
-.builtin-task-delete-btn:hover {
-    color: #ef4444;
-    background: rgba(239, 68, 68, 0.10);
-    border-color: #ef4444;
-}
-
-.restore-tasks-btn {
-    width: 100%;
-    padding: 10px;
-}
-
-.restore-tasks-btn[hidden] {
-    display: none;
-}
-
-
-/* =========================================
-   HIGHLIGHTED SUBTOTALS (items + time per task)
-   ========================================= */
-.subtotal-row input.calc-items,
-.subtotal-row input.calc-time {
-    background: var(--subtotal-bg);
-    color: var(--subtotal-text);
-    border: 2px solid var(--subtotal-border);
-    font-size: 16px;
-    font-weight: 800;
-    cursor: default;
-}
-
-.subtotal-row .subtotal-label-cell span {
-    font-size: 15px;
-}
-
-
-/* =========================================
-   LANDSCAPE SCREENSHOT LAYOUT
-   (only used on the temporary screenshot copy)
-   ========================================= */
-#screenshotClone .landscape-columns {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-}
-
-#screenshotClone .landscape-col {
-    flex: 1 1 0;
-    min-width: 0;
-}
-
-#screenshotClone .landscape-col .prod-table {
-    table-layout: fixed;
-}
-
-/* Column widths for the narrower side-by-side tables
-   (inline th widths need !important to be overridden) */
-#screenshotClone .landscape-col .prod-table th:nth-child(1) { width: 13% !important; }
-#screenshotClone .landscape-col .prod-table th:nth-child(2) { width: 34% !important; }
-#screenshotClone .landscape-col .prod-table th:nth-child(3) { width: 11% !important; }
-#screenshotClone .landscape-col .prod-table th:nth-child(4) { width: 11% !important; }
-#screenshotClone .landscape-col .prod-table th:nth-child(5) { width: 11% !important; }
-#screenshotClone .landscape-col .prod-table th:nth-child(6) { width: 20% !important; }
-
-#screenshotClone .landscape-col .row-hide-btn {
-    display: none;
-}
-
-/* =========================================
-   SCREENSHOT LAYOUT SELECTOR
-   ========================================= */
-.layout-select-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.layout-select-row label {
-    white-space: nowrap;
-    font-size: 11px;
-}
-
-.layout-select-row select {
-    flex: 1;
-    min-width: 0;
-    background: var(--surface-deep);
-    color: var(--input-text);
-    border: 1px solid var(--border-strong);
-    border-radius: 4px;
-    padding: 6px;
+.modal-box label {
     font-size: 12px;
-}
-
-/* =========================================
-   FBP / DATADOG COLUMN HEADERS
-   ========================================= */
-.special-header-row td {
-    background: var(--table-header);
     color: var(--text-muted);
-    padding: 10px;
-    font-weight: 600;
-    text-align: center;
-    border-bottom: 1px solid var(--border-color);
-    border-right: 1px solid var(--border-color);
 }
 
-
-/* =========================================
-   SPECIAL TASKS
-   ========================================= */
-
-/* Special task toggle + delete button (same look as custom tasks) */
-.special-task-control {
-    display: inline-flex;
-    align-items: stretch;
-    height: 34px;
-    margin: 0;
-    padding: 0;
-}
-
-.special-task-control .special-task-btn {
-    border-top-right-radius: 0;
-    border-bottom-right-radius: 0;
-}
-
-.special-task-delete-btn {
-    width: 24px;
-    padding: 0;
-    background: transparent;
-    color: var(--text-faint);
-    border: 1px solid var(--border-strong);
-    border-left: none;
-    border-top-right-radius: 4px;
-    border-bottom-right-radius: 4px;
-    font-size: 16px;
-    font-weight: bold;
-    cursor: pointer;
-    transition:
-        color 0.2s ease,
-        background 0.2s ease,
-        border-color 0.2s ease;
-}
-
-.special-task-delete-btn:hover {
-    color: #ef4444;
-    background: rgba(239, 68, 68, 0.10);
-    border-color: #ef4444;
-}
-
-/* The row itself (compact, like FBP / Datadog) */
-.special-row td {
-    padding: 4px 6px;
-    background: var(--surface-deep);
-    font-weight: bold;
-    text-align: center;
-}
-
-.special-row .special-task-cell {
-    color: var(--accent);
-}
-
-.special-row input {
+.modal-box input[type="text"],
+.modal-box input[type="number"] {
     width: 100%;
     box-sizing: border-box;
-    margin: 0;
+    padding: 8px 10px;
+    background: var(--surface-deep);
+    color: var(--input-text);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
 }
 
-/* Special task dialog */
+.modal-radio {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.modal-radio label {
+    color: var(--text-soft);
+    font-size: 13px;
+}
+
+.modal-error {
+    color: var(--error-text);
+    font-size: 12px;
+    min-height: 16px;
+}
+
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+/* ---- special task dialog ---- */
+
+#specialTaskOverlay .modal-box {
+    width: 440px;
+}
+
 .sp-fields {
     display: flex;
     flex-direction: column;
@@ -1572,9 +1269,9 @@ input.no-spinner::-webkit-inner-spin-button {
 }
 
 .sp-remove:hover:not(:disabled) {
-    color: #ef4444;
-    border-color: #ef4444;
-    background: rgba(239, 68, 68, 0.10);
+    color: var(--accent-red);
+    border-color: var(--accent-red);
+    background: var(--accent-red-soft);
 }
 
 .sp-remove:disabled,
@@ -1583,6 +1280,59 @@ input.no-spinner::-webkit-inner-spin-button {
     cursor: not-allowed;
 }
 
-#specialTaskOverlay .modal-box {
-    width: 440px;
+
+/* =====================================================================
+   11. SCREENSHOT
+   #screenshotArea is what you see; #screenshotClone is the temporary
+   off-screen copy that html2canvas captures. They must look identical.
+   ===================================================================== */
+
+#screenshotArea,
+#screenshotClone {
+    padding: 10px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background: var(--bg-dark);
+    border-radius: 6px;
+}
+
+#screenshotArea .shift-info-panel,
+#screenshotClone .shift-info-panel,
+#screenshotArea .table-container,
+#screenshotClone .table-container,
+#screenshotArea .total-production-bar,
+#screenshotClone .total-production-bar {
+    margin: 0;
+}
+
+/* ---- landscape layout (only on the temporary copy) ---- */
+
+#screenshotClone .landscape-columns {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+}
+
+#screenshotClone .landscape-col {
+    flex: 1 1 0;
+    min-width: 0;
+}
+
+#screenshotClone .landscape-col .prod-table {
+    table-layout: fixed;
+}
+
+/* Column widths for the narrower side-by-side tables
+   (the inline th widths in index.html need !important to be overridden) */
+#screenshotClone .landscape-col .prod-table th:nth-child(1) { width: 13% !important; }
+#screenshotClone .landscape-col .prod-table th:nth-child(2) { width: 34% !important; }
+#screenshotClone .landscape-col .prod-table th:nth-child(3) { width: 11% !important; }
+#screenshotClone .landscape-col .prod-table th:nth-child(4) { width: 11% !important; }
+#screenshotClone .landscape-col .prod-table th:nth-child(5) { width: 11% !important; }
+#screenshotClone .landscape-col .prod-table th:nth-child(6) { width: 20% !important; }
+
+#screenshotClone .landscape-col .row-hide-btn {
+    display: none;
 }
