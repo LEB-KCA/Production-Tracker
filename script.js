@@ -639,6 +639,47 @@ if (screenshotProductionBtn) {
                 );
 
 
+                // =========================================
+                // FIT LONG TEXT INSIDE ITS BOX
+                //
+                // A long merchant name used to spill out of its
+                // box and overlap the neighbouring cells. Shrink
+                // the text until it fits; if it still doesn't fit
+                // at the smallest size, clip it at the box edge.
+                // =========================================
+                const MIN_SHOT_FONT_SIZE = 8;
+
+                screenshotClone
+                    .querySelectorAll('.prod-table [data-shot-input]')
+                    .forEach(el => {
+
+                        // Never let text draw outside its own box
+                        el.style.overflow = 'hidden';
+
+                        if (el.scrollWidth <= el.clientWidth + 1) {
+                            return;
+                        }
+
+                        let fontSize =
+                            parseFloat(
+                                window.getComputedStyle(el).fontSize
+                            ) || 14;
+
+                        while (
+                            el.scrollWidth > el.clientWidth + 1 &&
+                            fontSize > MIN_SHOT_FONT_SIZE
+                        ) {
+                            fontSize -= 0.5;
+                            el.style.fontSize = `${fontSize}px`;
+                        }
+
+                        // Still too long: show the start of the text
+                        // (centered text would be cut on both sides)
+                        if (el.scrollWidth > el.clientWidth + 1) {
+                            el.style.justifyContent = 'flex-start';
+                        }
+                    });
+
                 if (isLandscape) {
                     height = Math.ceil(
                         screenshotClone.getBoundingClientRect().height
