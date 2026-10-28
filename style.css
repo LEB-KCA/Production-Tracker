@@ -1426,3 +1426,16 @@ input.no-spinner::-webkit-inner-spin-button {
     padding: 6px;
     font-size: 12px;
 }
+
+/* =========================================
+   FBP / DATADOG COLUMN HEADERS
+   ========================================= */
+.special-header-row td {
+    background: var(--table-header);
+    color: var(--text-muted);
+    padding: 10px;
+    font-weight: 600;
+    text-align: center;
+    border-bottom: 1px solid var(--border-color);
+    border-right: 1px solid var(--border-color);
+}

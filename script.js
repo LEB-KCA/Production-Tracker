@@ -168,8 +168,7 @@ function buildLandscapeLayout(clone) {
     // A new task block starts at a task label, FBP row or Datadog row
     const startsBlock = tr =>
         hasLabelCell(tr) ||
-        tr.classList.contains('fbp-row') ||
-        tr.classList.contains('datadog-row');
+        tr.classList.contains('special-header-row');
 
     // ---- pick where to cut the table in two ----
     // Prefer cutting between tasks; cut inside a long task only
@@ -180,6 +179,9 @@ function buildLandscapeLayout(clone) {
 
     for (let p = 1; p < rows.length; p++) {
         if (isSubtotal(rows[p])) continue;   // keep TOTAL with its rows
+
+        // keep FBP / Datadog rows together with their header
+        if (rows[p - 1].classList.contains('special-header-row')) continue;
 
         const score = Math.abs(p - ideal) + (startsBlock(rows[p]) ? 0 : 1.5);
 
@@ -1781,6 +1783,22 @@ function updateOTMinutesDisplay(totalTime) {
 
                     else if (row.type === 'fbp') {
 
+                        // Column header for the FBP row
+                        const fbpHeader =
+                            document.createElement('tr');
+
+                        fbpHeader.className =
+                            'special-header-row';
+
+                        fbpHeader.innerHTML = `
+                            <td>Task</td>
+                            <td colspan="2">TOTAL ULP</td>
+                            <td># of Items in ULP</td>
+                            <td colspan="2">Time</td>
+                        `;
+
+                        tbody.appendChild(fbpHeader);
+
                         tr.className =
                             'section-header-row fbp-row';
 
@@ -1836,6 +1854,21 @@ function updateOTMinutesDisplay(totalTime) {
                     // =================================
 
                     else if (row.type === 'datadog') {
+
+                        // Column header for the Datadog row
+                        const datadogHeader =
+                            document.createElement('tr');
+
+                        datadogHeader.className =
+                            'special-header-row';
+
+                        datadogHeader.innerHTML = `
+                            <td colspan="4">Task</td>
+                            <td>Items</td>
+                            <td>Time</td>
+                        `;
+
+                        tbody.appendChild(datadogHeader);
 
                         tr.className =
                             'section-header-row datadog-row';
