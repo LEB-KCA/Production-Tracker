@@ -17,7 +17,8 @@
  * 14.  Tools (comma separator, clear all)
  * 15.  Calculator
  * 16.  Theme
- * 17.  Startup
+ * 17.  Notepad
+ * 18.  Startup
  *
  * DEBUGGING
  *   - Add ?debug to the URL, or run  ProductionTracker.debug(true)  in the console.
@@ -56,7 +57,8 @@
         customTasks: 'productionTrackerCustomTasks',
         deletedTasks: 'productionTrackerDeletedTasks',
         screenshotLayout: 'productionTrackerScreenshotLayout',
-        theme: 'productionTrackerTheme'
+        theme: 'productionTrackerTheme',
+        notes: 'productionTrackerNotes'
     });
     const DEBUG_KEY = 'productionTrackerDebug';
 
@@ -2122,7 +2124,73 @@
     }
 
     /* =================================================================
-     * 17. STARTUP + DEBUG API
+     * 17. NOTEPAD
+     * Built here (no HTML needed). On wide screens it docks in the empty
+     * space to the right of the table; on narrow screens it sits below
+     * the table. It is outside #screenshotArea, so it is never captured.
+     * ================================================================= */
+
+    const NOTEPAD_SAVE_DELAY_MS = 300;
+
+    function initNotepad() {
+        const container = document.querySelector('.app-container');
+        if (!container) throw new Error('.app-container not found');
+
+        const panel = document.createElement('aside');
+        panel.className = 'notepad';
+        panel.id = 'notepadPanel';
+        panel.setAttribute('aria-label', 'Notepad');
+        panel.innerHTML = `
+            <div class="notepad-header">
+                <span class="notepad-title">NOTEPAD</span>
+                <span class="notepad-status" id="notepadStatus" aria-live="polite"></span>
+                <button type="button" class="clear-btn notepad-clear"
+                        id="notepadClear" title="Erase all notes">CLEAR</button>
+            </div>
+            <textarea id="notepadText" class="notepad-text"
+                      placeholder="Type your notes here..."
+                      spellcheck="false" aria-label="Notes"></textarea>
+        `;
+
+        // Just before the bottom tools (appends if they are missing)
+        container.insertBefore(panel, container.querySelector('.bottom-tools-grid'));
+
+        const textarea = $('notepadText');
+        const status = $('notepadStatus');
+        let timer = null;
+
+        textarea.value = Store.getRaw(STORAGE_KEYS.notes) || '';
+
+        function save() {
+            clearTimeout(timer);
+            timer = null;
+            const ok = Store.setRaw(STORAGE_KEYS.notes, textarea.value);
+            status.textContent = ok ? 'Saved' : 'Could not save!';
+            status.classList.toggle('error', !ok);
+            Log.debug('notepad saved', textarea.value.length, 'chars');
+        }
+
+        textarea.addEventListener('input', () => {
+            status.textContent = 'Saving...';
+            status.classList.remove('error');
+            clearTimeout(timer);
+            timer = setTimeout(save, NOTEPAD_SAVE_DELAY_MS);
+        });
+
+        // Never lose the last few keystrokes
+        textarea.addEventListener('blur', () => { if (timer) save(); });
+        window.addEventListener('pagehide', () => { if (timer) save(); });
+
+        $('notepadClear').addEventListener('click', () => {
+            if (textarea.value && !confirm('Erase everything in the notepad?')) return;
+            textarea.value = '';
+            save();
+            textarea.focus();
+        });
+    }
+
+    /* =================================================================
+     * 18. STARTUP + DEBUG API
      * ================================================================= */
 
     // Returns a list of problems in the current data (empty = healthy).
@@ -2218,6 +2286,7 @@
         safeInit('clear all', initClearAll);
         safeInit('screenshot', initScreenshot);
         safeInit('calculator', initCalculator);
+        safeInit('notepad', initNotepad);
 
         safeInit('first render', renderTable);
 

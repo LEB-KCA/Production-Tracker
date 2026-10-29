@@ -12,6 +12,7 @@
     9. Buttons
    10. Dialogs
    11. Screenshot (area + landscape layout)
+   12. Notepad
    ===================================================================== */
 
 
@@ -1335,4 +1336,75 @@ input.no-spinner::-webkit-inner-spin-button {
 
 #screenshotClone .landscape-col .row-hide-btn {
     display: none;
+}
+
+
+/* =====================================================================
+   12. NOTEPAD  (created by initNotepad() in script.js)
+   Narrow screens: a normal card below the table.
+   Wide screens:   docked in the empty space to the right of the table.
+   The 1200px / 1640px values come from .app-container's max-width:
+   the panel needs (viewport - 1200) / 2 to be wide enough to hold it.
+   ===================================================================== */
+
+.notepad {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: var(--panel-dark);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 12px;
+}
+
+.notepad-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 6px;
+}
+
+.notepad-title {
+    font-size: 14px;
+    font-weight: bold;
+    color: var(--text-muted);
+}
+
+.notepad-status {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--text-faint);
+}
+
+.notepad-status.error {
+    color: var(--error-text);
+}
+
+.notepad-clear {
+    padding: 4px 10px;
+}
+
+.notepad-text {
+    width: 100%;
+    min-height: 220px;
+    line-height: 1.5;
+    font-size: 13px;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+@media (min-width: 1640px) {
+    .notepad {
+        position: fixed;
+        top: 20px;
+        right: 16px;
+        width: min(360px, calc((100vw - 1200px) / 2 - 32px));
+        height: min(calc(100vh - 40px), 640px);
+    }
+
+    .notepad-text {
+        flex: 1;
+        min-height: 0;
+        resize: none;
+    }
 }
